@@ -170,7 +170,7 @@ def analyze_schedule_conflicts(version_id):
         port=int(os.getenv("DB_PORT") or "3306"),
         user=os.getenv("DB_USER") or "root",
         password=os.getenv("DB_PASSWORD") or "123456",
-        database=os.getenv("DB_NAME") or "paikew",
+        database=os.getenv("DB_NAME") or "paike",
         charset="utf8mb4",
     )
 
@@ -482,13 +482,15 @@ def optimize_conflicts(
     # 从班级冲突中提取
     for conflict in class_conflicts_data:
         for item in conflict["items"]:
-            # 找到对应的schedule记录
+            # 找到对应的schedule记录 (修复: 检查冲突slot是否在课程的时间范围内)
             for result in results:
+                start = result["start_slot"]
+                end = start + result["slots_count"] - 1
                 if (
                     result["course_name"] == item["course"]
                     and result["classroom_name"] == item["classroom"]
                     and result["week_day"] == conflict["weekday"]
-                    and result["start_slot"] == conflict["slot"]
+                    and start <= conflict["slot"] <= end
                 ):
                     conflict_schedule_ids.add(result["schedule_id"])
 
@@ -496,11 +498,13 @@ def optimize_conflicts(
     for conflict in teacher_conflicts_data:
         for item in conflict["items"]:
             for result in results:
+                start = result["start_slot"]
+                end = start + result["slots_count"] - 1
                 if (
                     result["course_name"] == item["course"]
                     and result["classroom_name"] == item["classroom"]
                     and result["week_day"] == conflict["weekday"]
-                    and result["start_slot"] == conflict["slot"]
+                    and start <= conflict["slot"] <= end
                 ):
                     conflict_schedule_ids.add(result["schedule_id"])
 
@@ -508,11 +512,13 @@ def optimize_conflicts(
     for conflict in classroom_conflicts_data:
         for item in conflict["items"]:
             for result in results:
+                start = result["start_slot"]
+                end = start + result["slots_count"] - 1
                 if (
                     result["course_name"] == item["course"]
                     and result["classroom_name"] == item["classroom"]
                     and result["week_day"] == conflict["weekday"]
-                    and result["start_slot"] == conflict["slot"]
+                    and start <= conflict["slot"] <= end
                 ):
                     conflict_schedule_ids.add(result["schedule_id"])
 
@@ -556,6 +562,7 @@ def optimize_conflicts(
 
     # 尝试为冲突课程重新安排时间
     adjustments = []
+    day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
     for schedule_id in conflict_schedule_ids:
         # 找到对应的排课记录
@@ -576,7 +583,16 @@ def optimize_conflicts(
 
         # 获取教师和班级
         teacher_ids = schedule_record.get("teacher_ids", "").split(", ")
+        teacher_ids = [tid for tid in teacher_ids if tid]  # 过滤空字符串
         classes = [cls["class_id"] for cls in task_classes[task_id]]
+
+        print(f"\n正在为 {schedule_record['course_name']} 寻找新时间...")
+        print(
+            f"  当前: {day_names[old_weekday]} 第{old_start_slot}-{old_start_slot+slots_count-1}节"
+        )
+        print(
+            f"  教师: {len(teacher_ids)}个, 班级: {len(classes)}个, 教室: {classroom_id}"
+        )
 
         # 尝试找到新的时间槽
         found_slot = False
@@ -625,11 +641,21 @@ def optimize_conflicts(
                 if not has_conflict:
                     time_slots.append((weekday, start_slot))
 
-        if time_slots:
-            # 选择第一个可用时间槽
-            new_weekday, new_start_slot = time_slots[0]
+        print(f"  找到 {len(time_slots)} 个候选时间槽")
 
-            # 更新占用记录
+        if time_slots:
+            # 优先选择不同于原时间的槽位
+            new_weekday, new_start_slot = None, None
+            for weekday, start_slot in time_slots:
+                if weekday != old_weekday or start_slot != old_start_slot:
+                    new_weekday, new_start_slot = weekday, start_slot
+                    break
+
+            # 如果所有时间槽都是原时间，说明该课程可以留在原位
+            # 这种情况下，跳过该课程，让其他冲突课程调整
+            if new_weekday is None:
+                print(f"  → 保留在原位，等待其他冲突课程调整")
+                continue  # 更新占用记录
             for slot in range(new_start_slot, new_start_slot + slots_count):
                 occupied_times["classroom"][classroom_id].add((new_weekday, slot))
                 for teacher_id in teacher_ids:
@@ -648,6 +674,46 @@ def optimize_conflicts(
             )
         else:
             print(f"⚠ 无法为课程 {schedule_record['course_name']} 找到合适的时间槽")
+            print(f"   原时间: {day_names[old_weekday]} 第{old_start_slot}节")
+            print(
+                f"   课程信息: {slots_count}节课, 教室{classroom_id}, {len(teacher_ids)}个教师, {len(classes)}个班级"
+            )
+
+            # 诊断：检查是否有可用时间（不考虑教室和教师限制）
+            available_for_class = []
+            day_names_local = ["", "周一", "周二", "周三", "周四", "周五"]
+            for weekday in range(1, 6):
+                for start_slot in range(1, 14 - slots_count + 1):
+                    if weekday == 4 and start_slot >= 6:
+                        continue
+
+                    # 只检查班级冲突
+                    has_class_conflict = False
+                    for class_id in classes:
+                        for slot in range(start_slot, start_slot + slots_count):
+                            if (weekday, slot) in occupied_times["class"][class_id]:
+                                has_class_conflict = True
+                                break
+                        if has_class_conflict:
+                            break
+
+                    if not has_class_conflict and (
+                        weekday != old_weekday or start_slot != old_start_slot
+                    ):
+                        available_for_class.append(
+                            f"{day_names_local[weekday]}{start_slot}-{start_slot+slots_count-1}"
+                        )
+
+            if available_for_class:
+                print(
+                    f"   班级空闲时间: {', '.join(available_for_class[:5])}"
+                    + (
+                        f" 等{len(available_for_class)}个"
+                        if len(available_for_class) > 5
+                        else ""
+                    )
+                )
+                print(f"   → 可能是教师或教室时间冲突导致无法调整")
 
     if adjustments:
         print(f"\n找到 {len(adjustments)} 个调整方案:")

@@ -353,7 +353,7 @@ $env:DB_HOST="localhost"
 $env:DB_PORT="3306"
 $env:DB_USER="root"
 $env:DB_PASSWORD="123456"
-$env:DB_NAME="paikew"
+$env:DB_NAME="paike"
 
 步骤 4：基础质量核查（运行前）
 1. teaching_tasks 中 slots_count 仅使用 2 或 3（或与 TIME_WINDOWS 定义匹配）。

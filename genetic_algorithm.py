@@ -524,13 +524,20 @@ class SchedulingGeneticAlgorithm:
         class_schedule: Dict,
         classroom_schedule: Dict,
     ):
-        """更新时间占用情况"""
+        """更新时间占用情况
+
+        重要修复: 对于多教师课程,需要标记所有教师的时间占用,
+        而不是只标记基因中选中的那个教师。
+        """
         time_slots = {
             (gene.week_day, slot)
             for slot in range(gene.start_slot, gene.start_slot + task.slots_count)
         }
 
-        teacher_schedule[gene.teacher_id].update(time_slots)
+        # 修复: 更新任务的所有教师的时间占用
+        for teacher_id in task.teachers:
+            teacher_schedule[teacher_id].update(time_slots)
+
         classroom_schedule[gene.classroom_id].update(time_slots)
 
         for class_id in task.classes:
@@ -557,7 +564,11 @@ class SchedulingGeneticAlgorithm:
 
             for slot in range(gene.start_slot, end_slot + 1):
                 time_key = (gene.week_day, slot)
-                teacher_schedule[gene.teacher_id].append(time_key)
+
+                # 修复: 记录任务的所有教师的时间占用
+                for teacher_id in task.teachers:
+                    teacher_schedule[teacher_id].append(time_key)
+
                 classroom_schedule[gene.classroom_id].append(time_key)
 
                 for class_id in task.classes:

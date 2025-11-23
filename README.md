@@ -121,15 +121,27 @@ pip install pymysql openpyxl
 $env:DB_HOST = "localhost"
 $env:DB_USER = "root"
 $env:DB_PASSWORD = "123456"
-$env:DB_NAME = "paikew"
+$env:DB_NAME = "paike"
 ```
 
 ```sql
 -- 创建数据库
-CREATE DATABASE `paikew` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE `paike` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- 导入表结构
--- 使用 new.sql 或 表3.txt 中的SQL脚本
+-- 使用 new.sql
+--# 登录MySQL
+--mysql -u [用户名] -p
+
+--# 创建一个空数据库（如果还没有的话）
+--CREATE DATABASE college_scheduler;
+
+--# 退出MySQL
+--exit;
+
+--# 在命令行中，将.sql文件导入到新数据库中
+---mysql -u [用户名] -p [数据库名] < [拷贝过来的文件名].sql
+
 ```
 
 ### 3. 运行排课

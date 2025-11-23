@@ -16,7 +16,7 @@ def check_data_scale():
     db_port = os.getenv("DB_PORT") or "3306"
     db_user = os.getenv("DB_USER") or "root"
     db_password = os.getenv("DB_PASSWORD") or "123456"
-    db_name = os.getenv("DB_NAME") or "paikew"
+    db_name = os.getenv("DB_NAME") or "paike"
 
     db_config = {
         "host": db_host,

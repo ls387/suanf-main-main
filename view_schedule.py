@@ -20,7 +20,7 @@ def view_schedule(version_id):
         port=int(os.getenv("DB_PORT") or "3306"),
         user=os.getenv("DB_USER") or "root",
         password=os.getenv("DB_PASSWORD") or "123456",
-        database=os.getenv("DB_NAME") or "paikew",
+        database=os.getenv("DB_NAME") or "paike",
         charset="utf8mb4",
     )
 
