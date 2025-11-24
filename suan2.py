@@ -224,6 +224,9 @@ class SchedulingSystem:
         # 教室利用率统计
         self._analyze_classroom_utilization(solution, task_dict, data)
 
+        # 个性化要求满足情况分析
+        self._analyze_preference_satisfaction(solution, task_dict, data)
+
     def _print_conflict_details(
         self, conflict_details: List[Dict], entity_type: str, data: Dict
     ):
@@ -422,6 +425,167 @@ class SchedulingSystem:
             logger.warning(
                 f"发现 {len(low_utilization_classrooms)} 间教室利用率过低(<50%)"
             )
+
+    def _analyze_preference_satisfaction(
+        self, solution: List[Gene], task_dict: Dict, data: Dict
+    ):
+        """分析个性化要求满足情况"""
+        from collections import defaultdict
+        from data_models import PreferenceType
+
+        logger.info("\n【个性化要求满足情况分析】")
+
+        # 统计各类个性化要求
+        total_preferences = len(data["teacher_preferences"])
+        if total_preferences == 0:
+            logger.info("✓ 没有设置个性化要求")
+            return
+
+        logger.info(f"总共有 {total_preferences} 条个性化要求")
+
+        # 按教师分组个性化要求
+        teacher_prefs = defaultdict(lambda: {"preferred": [], "avoided": []})
+        for pref in data["teacher_preferences"]:
+            if pref.preference_type == PreferenceType.PREFERRED:
+                teacher_prefs[pref.teacher_id]["preferred"].append(pref)
+            else:
+                teacher_prefs[pref.teacher_id]["avoided"].append(pref)
+
+        # 构建教师实际排课时间
+        teacher_schedules = defaultdict(list)
+        for gene in solution:
+            task = task_dict[gene.task_id]
+            # 注意：一个任务可能有多个教师
+            for teacher_id in task.teachers:
+                start_slot = gene.start_slot
+                end_slot = start_slot + task.slots_count - 1
+                teacher_schedules[teacher_id].append(
+                    {
+                        "weekday": gene.week_day,
+                        "start_slot": start_slot,
+                        "end_slot": end_slot,
+                        "course_name": (
+                            data["courses"].get(task.offering.course_id).course_name
+                            if task.offering
+                            else "未知课程"
+                        ),
+                        "task_id": gene.task_id,
+                    }
+                )
+
+        # 分析每个教师的个性化要求满足情况
+        violated_preferred = []  # 未满足的偏好时间
+        violated_avoided = []  # 违反的避免时间
+
+        for teacher_id, prefs in teacher_prefs.items():
+            teacher_name = data["teachers"].get(teacher_id)
+            teacher_name_str = teacher_name.teacher_name if teacher_name else teacher_id
+            schedule = teacher_schedules.get(teacher_id, [])
+
+            # 检查偏好时间（PREFERRED）
+            for pref in prefs["preferred"]:
+                if pref.weekday and pref.start_slot and pref.end_slot:
+                    # 检查是否有课程安排在这个时间段
+                    found = False
+                    for sch in schedule:
+                        if sch["weekday"] == pref.weekday:
+                            # 检查时间段是否有交集
+                            if not (
+                                sch["end_slot"] < pref.start_slot
+                                or sch["start_slot"] > pref.end_slot
+                            ):
+                                found = True
+                                break
+
+                    if not found:
+                        violated_preferred.append(
+                            {
+                                "teacher_id": teacher_id,
+                                "teacher_name": teacher_name_str,
+                                "weekday": pref.weekday,
+                                "start_slot": pref.start_slot,
+                                "end_slot": pref.end_slot,
+                                "penalty_score": pref.penalty_score,
+                            }
+                        )
+
+            # 检查避免时间（AVOIDED）
+            for pref in prefs["avoided"]:
+                if pref.weekday and pref.start_slot and pref.end_slot:
+                    # 检查是否有课程安排在这个时间段
+                    for sch in schedule:
+                        if sch["weekday"] == pref.weekday:
+                            # 检查时间段是否有交集
+                            if not (
+                                sch["end_slot"] < pref.start_slot
+                                or sch["start_slot"] > pref.end_slot
+                            ):
+                                violated_avoided.append(
+                                    {
+                                        "teacher_id": teacher_id,
+                                        "teacher_name": teacher_name_str,
+                                        "weekday": pref.weekday,
+                                        "start_slot": pref.start_slot,
+                                        "end_slot": pref.end_slot,
+                                        "course_name": sch["course_name"],
+                                        "course_time": f"{sch['start_slot']}-{sch['end_slot']}节",
+                                        "penalty_score": pref.penalty_score,
+                                    }
+                                )
+                                break
+
+        # 输出分析结果
+        day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+        # 偏好时间未满足情况
+        if violated_preferred:
+            logger.warning(f"\n⚠ 发现 {len(violated_preferred)} 条偏好时间未被满足:")
+            for i, item in enumerate(violated_preferred[:10], 1):  # 只显示前10条
+                logger.warning(
+                    f"  [{i}] 教师: {item['teacher_name']}, "
+                    f"偏好时间: {day_names[item['weekday']]} {item['start_slot']}-{item['end_slot']}节, "
+                    f"惩罚分数: {item['penalty_score']}"
+                )
+            if len(violated_preferred) > 10:
+                logger.warning(
+                    f"  ... 还有 {len(violated_preferred) - 10} 条偏好时间未满足"
+                )
+        else:
+            logger.info("✓ 所有偏好时间都已满足")
+
+        # 避免时间被违反情况
+        if violated_avoided:
+            logger.warning(f"\n⚠ 发现 {len(violated_avoided)} 条避免时间被违反:")
+            for i, item in enumerate(violated_avoided[:10], 1):  # 只显示前10条
+                logger.warning(
+                    f"  [{i}] 教师: {item['teacher_name']}, "
+                    f"避免时间: {day_names[item['weekday']]} {item['start_slot']}-{item['end_slot']}节, "
+                    f"实际课程: {item['course_name']} ({item['course_time']}), "
+                    f"惩罚分数: {item['penalty_score']}"
+                )
+            if len(violated_avoided) > 10:
+                logger.warning(
+                    f"  ... 还有 {len(violated_avoided) - 10} 条避免时间被违反"
+                )
+        else:
+            logger.info("✓ 所有避免时间都已遵守")
+
+        # 计算总体满足率
+        total_prefs_count = sum(
+            len(p["preferred"]) + len(p["avoided"]) for p in teacher_prefs.values()
+        )
+        satisfied_count = (
+            total_prefs_count - len(violated_preferred) - len(violated_avoided)
+        )
+        satisfaction_rate = (
+            (satisfied_count / total_prefs_count * 100)
+            if total_prefs_count > 0
+            else 100
+        )
+
+        logger.info(
+            f"\n个性化要求总体满足率: {satisfaction_rate:.1f}% ({satisfied_count}/{total_prefs_count})"
+        )
 
     def cleanup(self):
         """清理资源"""
