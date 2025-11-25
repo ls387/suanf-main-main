@@ -1,0 +1,45 @@
+# 冲突优化功能修复
+
+## 问题
+在运行冲突优化时出现错误：
+```
+KeyError: 'slot'
+```
+
+## 原因
+冲突数据结构已更新：
+- **旧结构**：`conflict["slot"]` - 单个时间节
+- **新结构**：`conflict["overlap_start"]` 和 `conflict["overlap_end"]` - 时间段范围
+- **items包含**：`item["schedule_id"]` - 直接包含schedule_id
+
+## 修复
+在 `optimize_conflicts()` 函数中：
+
+### 修复前
+```python
+# 需要通过课程名、教室名、时间来查找schedule_id
+for item in conflict["items"]:
+    for result in results:
+        if (...匹配条件... and start <= conflict["slot"] <= end):
+            conflict_schedule_ids.add(result["schedule_id"])
+```
+
+### 修复后
+```python
+# 直接从items中获取schedule_id
+for item in conflict["items"]:
+    if "schedule_id" in item:
+        conflict_schedule_ids.add(item["schedule_id"])
+```
+
+## 优势
+1. ✅ **更简单**：不需要复杂的匹配逻辑
+2. ✅ **更准确**：直接使用schedule_id，避免误匹配
+3. ✅ **更高效**：不需要嵌套循环
+
+## 验证
+再次运行应该能正常优化冲突：
+```bash
+python analyze_conflicts.py 1
+# 选择 y 进行优化
+```

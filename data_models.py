@@ -157,6 +157,7 @@ class TeachingTask:
     student_count: int = 0
     required_features: Set[str] = None  # 必需的feature_ids
     offering: Optional[CourseOffering] = None
+    weeks: Set[int] = None  # 上课的周次集合
 
     def __post_init__(self):
         if self.teachers is None:
@@ -165,6 +166,8 @@ class TeachingTask:
             self.classes = []
         if self.required_features is None:
             self.required_features = set()
+        if self.weeks is None:
+            self.weeks = set()
 
 
 @dataclass

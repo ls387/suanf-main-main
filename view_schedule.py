@@ -12,6 +12,58 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from datetime import datetime
 
 
+def format_weeks(weeks_str, start_week=None, end_week=None, week_pattern=None):
+    """将逗号分隔的周次字符串格式化为易读格式 (例如: '1-16周' 或 '1-8,10-16周')
+
+    Args:
+        weeks_str: 逗号分隔的周次字符串 (来自 offering_weeks 表)
+        start_week: 起始周 (来自 course_offerings)
+        end_week: 结束周 (来自 course_offerings)
+        week_pattern: 周次模式 (来自 course_offerings)
+    """
+    # 如果有明确的周次数据,使用它
+    if weeks_str:
+        try:
+            weeks = sorted([int(w) for w in weeks_str.split(",") if w.strip()])
+            if weeks:
+                ranges = []
+                start = weeks[0]
+                prev = weeks[0]
+
+                for w in weeks[1:]:
+                    if w == prev + 1:
+                        prev = w
+                    else:
+                        if start == prev:
+                            ranges.append(str(start))
+                        else:
+                            ranges.append(f"{start}-{prev}")
+                        start = w
+                        prev = w
+
+                if start == prev:
+                    ranges.append(str(start))
+                else:
+                    ranges.append(f"{start}-{prev}")
+
+                return ",".join(ranges) + "周"
+        except:
+            pass
+
+    # 如果没有周次数据,根据 week_pattern 生成
+    if week_pattern and start_week and end_week:
+        if week_pattern == "SINGLE":
+            return f"{start_week}-{end_week}周(单)"
+        elif week_pattern == "DOUBLE":
+            return f"{start_week}-{end_week}周(双)"
+        elif week_pattern in ("CONTINUOUS", "ALL_WEEKS"):
+            return f"{start_week}-{end_week}周"
+        elif week_pattern == "CUSTOM":
+            return f"{start_week}-{end_week}周"
+
+    return "全学期"
+
+
 def view_schedule(version_id):
     """查看排课结果"""
 
@@ -58,6 +110,10 @@ def view_schedule(version_id):
             GROUP_CONCAT(DISTINCT t.teacher_name SEPARATOR ', ') AS teacher_name,
             GROUP_CONCAT(DISTINCT t.teacher_id SEPARATOR ', ') AS teacher_ids,
             GROUP_CONCAT(DISTINCT cl.class_name SEPARATOR ', ') AS class_names,
+            GROUP_CONCAT(DISTINCT ow.week_number ORDER BY ow.week_number SEPARATOR ',') AS weeks,
+            co.start_week,
+            co.end_week,
+            co.week_pattern,
             cr.classroom_name,
             cr.capacity,
             co.student_count_estimate
@@ -69,11 +125,13 @@ def view_schedule(version_id):
         LEFT JOIN teachers t ON ot.teacher_id = t.teacher_id
         LEFT JOIN offering_classes oc ON co.offering_id = oc.offering_id
         LEFT JOIN classes cl ON oc.class_id = cl.class_id
+        LEFT JOIN offering_weeks ow ON co.offering_id = ow.offering_id
         JOIN classrooms cr ON sr.classroom_id = cr.classroom_id
         WHERE sr.version_id = %s
         GROUP BY sr.schedule_id, sr.week_day, sr.start_slot, sr.end_slot, 
                  sr.classroom_id, tt.task_id, tt.offering_id, tt.slots_count, c.course_name, 
-                 co.course_nature, cr.classroom_name, cr.capacity, co.student_count_estimate
+                 co.course_nature, co.start_week, co.end_week, co.week_pattern,
+                 cr.classroom_name, cr.capacity, co.student_count_estimate
         ORDER BY sr.week_day, sr.start_slot
         """
 
@@ -102,9 +160,9 @@ def view_schedule(version_id):
             print(f"{day_names[day]}")
             print(f"{'='*100}")
             print(
-                f"{'节次':<6} {'课程名称':<25} {'性质':<8} {'教师':<12} {'教室':<15} {'人数/容量':<12}"
+                f"{'节次':<6} {'课程名称':<25} {'性质':<8} {'教师':<12} {'教室':<15} {'人数/容量':<12} {'周次':<15}"
             )
-            print("-" * 100)
+            print("-" * 115)
 
             for item in schedule_by_day[day]:
                 slots_str = f"{item['start_slot']}-{item['end_slot']}"
@@ -114,10 +172,16 @@ def view_schedule(version_id):
                 utilization = f"{student_count}/{capacity}"
 
                 teacher_name = item["teacher_name"] or "未分配"
+                weeks_display = format_weeks(
+                    item.get("weeks"),
+                    item.get("start_week"),
+                    item.get("end_week"),
+                    item.get("week_pattern"),
+                )
 
                 print(
                     f"{slots_str:<6} {item['course_name']:<25} {item['course_nature']:<8} "
-                    f"{teacher_name:<12} {item['classroom_name']:<15} {utilization:<12}"
+                    f"{teacher_name:<12} {item['classroom_name']:<15} {utilization:<12} {weeks_display:<15}"
                 )
 
         # 统计信息
@@ -208,6 +272,7 @@ def export_to_excel(version, results, schedule_by_day, cursor):
         ws.column_dimensions["F"].width = 25
         ws.column_dimensions["G"].width = 12
         ws.column_dimensions["H"].width = 12
+        ws.column_dimensions["I"].width = 15
 
         # 写入标题
         headers = [
@@ -219,6 +284,7 @@ def export_to_excel(version, results, schedule_by_day, cursor):
             "班级",
             "教室容量",
             "上课人数",
+            "周次",
         ]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
@@ -235,6 +301,13 @@ def export_to_excel(version, results, schedule_by_day, cursor):
             teacher_name = item["teacher_name"] or "未分配"
             class_names = item["class_names"] or "未分配"
 
+            weeks_display = format_weeks(
+                item.get("weeks"),
+                item.get("start_week"),
+                item.get("end_week"),
+                item.get("week_pattern"),
+            )
+
             data = [
                 slots_str,
                 item["course_name"],
@@ -244,6 +317,7 @@ def export_to_excel(version, results, schedule_by_day, cursor):
                 class_names,
                 capacity,
                 student_count,
+                weeks_display,
             ]
 
             for col, value in enumerate(data, 1):
@@ -296,9 +370,19 @@ def export_to_excel(version, results, schedule_by_day, cursor):
         ws.column_dimensions["E"].width = 25
         ws.column_dimensions["F"].width = 12
         ws.column_dimensions["G"].width = 12
+        ws.column_dimensions["H"].width = 15
 
         # 写入标题
-        headers = ["星期", "节次", "课程名称", "教室", "班级", "教室容量", "上课人数"]
+        headers = [
+            "星期",
+            "节次",
+            "课程名称",
+            "教室",
+            "班级",
+            "教室容量",
+            "上课人数",
+            "周次",
+        ]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = header_font
@@ -315,6 +399,12 @@ def export_to_excel(version, results, schedule_by_day, cursor):
                     student_count = item["student_count_estimate"] or 0
                     capacity = item["capacity"] or 0
                     class_names = item["class_names"] or "未分配"
+                    weeks_display = format_weeks(
+                        item.get("weeks"),
+                        item.get("start_week"),
+                        item.get("end_week"),
+                        item.get("week_pattern"),
+                    )
 
                     data = [
                         day_names[day],
@@ -324,6 +414,7 @@ def export_to_excel(version, results, schedule_by_day, cursor):
                         class_names,
                         capacity,
                         student_count,
+                        weeks_display,
                     ]
 
                     for col, value in enumerate(data, 1):
@@ -380,9 +471,10 @@ def export_to_excel(version, results, schedule_by_day, cursor):
         ws.column_dimensions["D"].width = 20
         ws.column_dimensions["E"].width = 15
         ws.column_dimensions["F"].width = 10
+        ws.column_dimensions["G"].width = 15
 
         # 写入标题
-        headers = ["星期", "节次", "课程名称", "教室", "教师", "性质"]
+        headers = ["星期", "节次", "课程名称", "教室", "教师", "性质", "周次"]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = header_font
@@ -397,6 +489,12 @@ def export_to_excel(version, results, schedule_by_day, cursor):
                 for item in class_by_day[day]:
                     slots_str = f"{item['start_slot']}-{item['end_slot']}"
                     teacher_name = item["teacher_name"] or "未分配"
+                    weeks_display = format_weeks(
+                        item.get("weeks"),
+                        item.get("start_week"),
+                        item.get("end_week"),
+                        item.get("week_pattern"),
+                    )
 
                     data = [
                         day_names[day],
@@ -405,6 +503,7 @@ def export_to_excel(version, results, schedule_by_day, cursor):
                         item["classroom_name"],
                         teacher_name,
                         item["course_nature"],
+                        weeks_display,
                     ]
 
                     for col, value in enumerate(data, 1):
@@ -453,9 +552,19 @@ def export_to_excel(version, results, schedule_by_day, cursor):
         ws.column_dimensions["E"].width = 15
         ws.column_dimensions["F"].width = 12
         ws.column_dimensions["G"].width = 12
+        ws.column_dimensions["H"].width = 15
 
         # 写入标题
-        headers = ["星期", "节次", "课程名称", "班级", "教师", "教室容量", "上课人数"]
+        headers = [
+            "星期",
+            "节次",
+            "课程名称",
+            "班级",
+            "教师",
+            "教室容量",
+            "上课人数",
+            "周次",
+        ]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = header_font
@@ -472,6 +581,12 @@ def export_to_excel(version, results, schedule_by_day, cursor):
                     student_count = item["student_count_estimate"] or 0
                     teacher_name = item["teacher_name"] or "未分配"
                     class_names = item["class_names"] or "未分配"
+                    weeks_display = format_weeks(
+                        item.get("weeks"),
+                        item.get("start_week"),
+                        item.get("end_week"),
+                        item.get("week_pattern"),
+                    )
 
                     data = [
                         day_names[day],
@@ -481,6 +596,7 @@ def export_to_excel(version, results, schedule_by_day, cursor):
                         teacher_name,
                         classroom_capacity,
                         student_count,
+                        weeks_display,
                     ]
 
                     for col, value in enumerate(data, 1):
@@ -541,7 +657,7 @@ def export_to_excel(version, results, schedule_by_day, cursor):
     filename = f"排课结果_版本{version['version_id']}_{version['semester']}.xlsx"
     wb.save(filename)
 
-    print(f"\n✓ 排课结果已导出到: {filename}")
+    print(f"\n√ 排课结果已导出到: {filename}")
     print(f"  文件位置: {os.path.abspath(filename)}")
 
 

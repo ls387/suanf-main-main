@@ -116,6 +116,7 @@ class DataLoader:
             "teacher_blackout_times": self._load_teacher_blackout_times(semester),
             "teacher_preferences": self._load_teacher_preferences(),
             "task_relations": self._load_task_relations(semester),
+            "offering_weeks": self._load_offering_weeks(),  # 新增
         }
 
         # 填充教学任务的详细信息
@@ -243,6 +244,60 @@ class DataLoader:
 
         return preferences
 
+    def _load_offering_weeks(self) -> Dict[int, Set[int]]:
+        """加载offering的周次信息
+
+        Returns:
+            Dict[offering_id, Set[week_number]]
+        """
+        query = "SELECT offering_id, week_number FROM offering_weeks ORDER BY offering_id, week_number"
+        rows = self.db.execute_query(query)
+
+        offering_weeks = {}
+        for row in rows:
+            offering_id = row["offering_id"]
+            week_number = row["week_number"]
+            if offering_id not in offering_weeks:
+                offering_weeks[offering_id] = set()
+            offering_weeks[offering_id].add(week_number)
+
+        logger.info(f"加载了 {len(offering_weeks)} 个开课计划的周次信息")
+        return offering_weeks
+
+    def _generate_weeks_from_pattern(
+        self,
+        start_week: Optional[int],
+        end_week: Optional[int],
+        week_pattern: Optional[str],
+    ) -> Set[int]:
+        """根据week_pattern生成周次集合
+
+        Args:
+            start_week: 起始周
+            end_week: 结束周
+            week_pattern: 周次模式 (CONTINUOUS, SINGLE, DOUBLE, CUSTOM)
+
+        Returns:
+            Set[int]: 周次集合
+        """
+        if not start_week or not end_week:
+            # 如果没有指定，默认1-18周
+            start_week = 1
+            end_week = 18
+
+        if not week_pattern or week_pattern == "CONTINUOUS":
+            # 全学期/连续周
+            return set(range(start_week, end_week + 1))
+        elif week_pattern == "SINGLE":
+            # 单周
+            return set(w for w in range(start_week, end_week + 1) if w % 2 == 1)
+        elif week_pattern == "DOUBLE":
+            # 双周
+            return set(w for w in range(start_week, end_week + 1) if w % 2 == 0)
+        else:
+            # CUSTOM 或未知，默认全学期
+            return set(range(start_week, end_week + 1))
+
     def _enrich_teaching_tasks(self, data: Dict):
         """填充教学任务的详细信息"""
         logger.info("开始填充教学任务详细信息")
@@ -334,6 +389,22 @@ class DataLoader:
 
             # 填充开课计划信息
             task.offering = data["course_offerings"].get(task.offering_id)
+
+            # 填充周次信息
+            if task.offering:
+                offering_id = task.offering_id
+                # 从 offering_weeks 获取具体周次
+                if offering_id in data.get("offering_weeks", {}):
+                    task.weeks = data["offering_weeks"][offering_id]
+                else:
+                    # 如果没有具体周次数据，根据 week_pattern 生成
+                    task.weeks = self._generate_weeks_from_pattern(
+                        task.offering.start_week,
+                        task.offering.end_week,
+                        task.offering.week_pattern,
+                    )
+            else:
+                task.weeks = set()  # 默认空集
 
         logger.info("教学任务详细信息填充完成")
 

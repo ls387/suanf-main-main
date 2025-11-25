@@ -199,14 +199,30 @@ class SchedulingGeneticAlgorithm:
         class_schedule = defaultdict(set)  # class_id -> {(weekday, slot), ...}
         classroom_schedule = defaultdict(set)  # classroom_id -> {(weekday, slot), ...}
 
+        # 跟踪带周次信息的占用情况
+        # 结构: schedule_with_weeks[id][(weekday, slot)] = [weeks1, weeks2, ...]
+        class_schedule_with_weeks = defaultdict(lambda: defaultdict(list))
+        classroom_schedule_with_weeks = defaultdict(lambda: defaultdict(list))
+
         for task in self.tasks:
             gene = self._create_gene_for_task(
-                task, teacher_schedule, class_schedule, classroom_schedule
+                task,
+                teacher_schedule,
+                class_schedule,
+                classroom_schedule,
+                class_schedule_with_weeks,
+                classroom_schedule_with_weeks,
             )
             if gene:
                 genes.append(gene)
                 self._update_schedules(
-                    gene, task, teacher_schedule, class_schedule, classroom_schedule
+                    gene,
+                    task,
+                    teacher_schedule,
+                    class_schedule,
+                    classroom_schedule,
+                    class_schedule_with_weeks,
+                    classroom_schedule_with_weeks,
                 )
 
         return genes
@@ -217,6 +233,8 @@ class SchedulingGeneticAlgorithm:
         teacher_schedule: Dict,
         class_schedule: Dict,
         classroom_schedule: Dict,
+        class_schedule_with_weeks: Dict = None,
+        classroom_schedule_with_weeks: Dict = None,
     ) -> Optional[Gene]:
         """为单个任务创建基因"""
         if not task.teachers:
@@ -261,6 +279,8 @@ class SchedulingGeneticAlgorithm:
                 teacher_schedule,
                 class_schedule,
                 task_id=task.task_id,
+                weeks=task.weeks,
+                class_schedule_with_weeks=class_schedule_with_weeks,
             ):
                 continue
 
@@ -273,6 +293,7 @@ class SchedulingGeneticAlgorithm:
                 teacher_id=teacher_id,
                 class_ids=task.classes,
                 existing_genes=[],  # 初始创建时无已有基因
+                classroom_schedule_with_weeks=classroom_schedule_with_weeks,
             )
             if classroom:
                 return Gene(
@@ -312,6 +333,7 @@ class SchedulingGeneticAlgorithm:
                 teacher_schedule,
                 class_schedule,
                 task_id=task.task_id,
+                weeks=task.weeks,
             ):
                 continue
 
@@ -324,6 +346,7 @@ class SchedulingGeneticAlgorithm:
                 teacher_id=teacher_id,
                 class_ids=task.classes,
                 existing_genes=[],  # 初始创建时无已有基因
+                classroom_schedule_with_weeks=classroom_schedule_with_weeks,
             )
             if classroom:
                 return Gene(
@@ -395,11 +418,15 @@ class SchedulingGeneticAlgorithm:
         teacher_schedule: Dict,
         class_schedule: Dict,
         task_id: str = None,
+        weeks: Set[int] = None,
+        class_schedule_with_weeks: Dict = None,
     ) -> bool:
         """检查时间冲突
 
         重要修复: 对于多教师课程,需要检查该任务的所有教师是否有冲突,
         而不仅仅检查基因中被选中的那个教师。
+
+        周次冲突检查: 只有当时间段冲突且周次有重叠时才算冲突。
         """
         time_slots = {
             (weekday, slot) for slot in range(start_slot, start_slot + slots_count)
@@ -410,16 +437,34 @@ class SchedulingGeneticAlgorithm:
             task = self.task_dict[task_id]
             for tid in task.teachers:
                 if teacher_schedule[tid] & time_slots:
-                    return True
+                    # 时间冲突,检查周次是否重叠
+                    if (
+                        weeks is None
+                        or task.weeks is None
+                        or len(task.weeks & weeks) > 0
+                    ):
+                        return True
         else:
             # 向后兼容:只检查传入的单个教师
             if teacher_schedule[teacher_id] & time_slots:
                 return True
 
-        # 检查班级冲突
-        for class_id in class_ids:
-            if class_schedule[class_id] & time_slots:
-                return True
+        # 检查班级冲突（考虑周次）
+        if class_schedule_with_weeks and weeks:
+            for class_id in class_ids:
+                for time_key in time_slots:
+                    if time_key in class_schedule_with_weeks[class_id]:
+                        # 该班级在该时间有课，检查周次是否重叠
+                        for other_weeks in class_schedule_with_weeks[class_id][
+                            time_key
+                        ]:
+                            if len(weeks & other_weeks) > 0:
+                                return True
+        else:
+            # 旧逻辑：保守检测（无周次信息时）
+            for class_id in class_ids:
+                if class_schedule[class_id] & time_slots:
+                    return True
 
         return False
 
@@ -432,6 +477,7 @@ class SchedulingGeneticAlgorithm:
         teacher_id: str = None,
         class_ids: List[str] = None,
         existing_genes: List[Gene] = None,
+        classroom_schedule_with_weeks: Dict = None,
     ) -> Optional[Classroom]:
         """选择合适的教室（优化版：优先选择同教师/班级已使用的教室）"""
         time_slots = {
@@ -449,8 +495,30 @@ class SchedulingGeneticAlgorithm:
             if not task.required_features.issubset(classroom.features):
                 continue
 
-            # 检查时间冲突
-            if classroom_schedule[classroom.classroom_id] & time_slots:
+            # 检查时间冲突（考虑周次）
+            has_conflict = False
+            if classroom_schedule_with_weeks and task.weeks:
+                # 使用带周次的检测
+                for time_key in time_slots:
+                    if (
+                        time_key
+                        in classroom_schedule_with_weeks[classroom.classroom_id]
+                    ):
+                        # 该教室在该时间被占用，检查周次是否重叠
+                        for other_weeks in classroom_schedule_with_weeks[
+                            classroom.classroom_id
+                        ][time_key]:
+                            if len(task.weeks & other_weeks) > 0:
+                                has_conflict = True
+                                break
+                    if has_conflict:
+                        break
+            else:
+                # 旧逻辑：保守检测
+                if classroom_schedule[classroom.classroom_id] & time_slots:
+                    has_conflict = True
+
+            if has_conflict:
                 continue
 
             suitable_classrooms.append(classroom)
@@ -523,6 +591,8 @@ class SchedulingGeneticAlgorithm:
         teacher_schedule: Dict,
         class_schedule: Dict,
         classroom_schedule: Dict,
+        class_schedule_with_weeks: Dict = None,
+        classroom_schedule_with_weeks: Dict = None,
     ):
         """更新时间占用情况
 
@@ -543,6 +613,18 @@ class SchedulingGeneticAlgorithm:
         for class_id in task.classes:
             class_schedule[class_id].update(time_slots)
 
+        # 更新带周次信息的schedule
+        if class_schedule_with_weeks and task.weeks:
+            for class_id in task.classes:
+                for time_key in time_slots:
+                    class_schedule_with_weeks[class_id][time_key].append(task.weeks)
+
+        if classroom_schedule_with_weeks and task.weeks:
+            for time_key in time_slots:
+                classroom_schedule_with_weeks[gene.classroom_id][time_key].append(
+                    task.weeks
+                )
+
     def fitness(self, individual: List[Gene]) -> float:
         """计算适应度函数
 
@@ -557,6 +639,11 @@ class SchedulingGeneticAlgorithm:
         teacher_schedule = defaultdict(list)
         class_schedule = defaultdict(list)
         classroom_schedule = defaultdict(list)
+
+        # 构建带周次信息的占用表
+        # 结构: schedule_with_weeks[id][(weekday, slot)] = [weeks1, weeks2, ...]
+        class_schedule_with_weeks = defaultdict(lambda: defaultdict(list))
+        classroom_schedule_with_weeks = defaultdict(lambda: defaultdict(list))
 
         for gene in individual:
             task = self.task_dict[gene.task_id]
@@ -573,6 +660,15 @@ class SchedulingGeneticAlgorithm:
 
                 for class_id in task.classes:
                     class_schedule[class_id].append(time_key)
+                    # 记录周次信息
+                    if task.weeks:
+                        class_schedule_with_weeks[class_id][time_key].append(task.weeks)
+
+                # 记录教室的周次信息
+                if task.weeks:
+                    classroom_schedule_with_weeks[gene.classroom_id][time_key].append(
+                        task.weeks
+                    )
 
         # 检查硬约束
         score += self._check_hard_constraints(
