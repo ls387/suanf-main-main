@@ -487,9 +487,20 @@ class SchedulingGeneticAlgorithm:
         # 筛选满足容量和特征要求的教室
         suitable_classrooms = []
         for classroom in self.classrooms:
-            # 检查容量
+            # 检查容量：必须大于等于学生人数
             if classroom.capacity < task.student_count:
                 continue
+
+            # 容量浪费检查：避免容量过大
+            # 允许最大浪费率：小班(<30人)允许50%，中班(30-60)允许40%，大班(>60)允许30%
+            max_waste_ratio = (
+                0.5
+                if task.student_count < 30
+                else (0.4 if task.student_count < 60 else 0.3)
+            )
+            waste_ratio = (classroom.capacity - task.student_count) / classroom.capacity
+            if waste_ratio > max_waste_ratio:
+                continue  # 容量浪费太大，跳过
 
             # 检查特征要求
             if not task.required_features.issubset(classroom.features):
@@ -549,10 +560,10 @@ class SchedulingGeneticAlgorithm:
                 preferred_classrooms if preferred_classrooms else suitable_classrooms
             )
 
-            # 优先选择容量最匹配的教室（提高利用率）
-            # 目标：利用率在75%-90%之间最佳
+            # 优先选择容量最匹配的教室（严格控制浪费）
+            # 目标：利用率在80%-95%之间最佳
             def utilization_score(classroom):
-                """计算教室利用率得分，越接近理想利用率得分越高"""
+                """计算教室利用率得分，越接近理想利用率得分越高（分数越小越好）"""
                 if classroom.capacity == 0:
                     return float("inf")
 
@@ -564,20 +575,26 @@ class SchedulingGeneticAlgorithm:
                     if preferred_classrooms
                     else set()
                 )
-                preference_bonus = -0.2 if is_preferred else 0  # 负数表示更优先
+                preference_bonus = -0.15 if is_preferred else 0  # 负数表示更优先
 
-                # 理想利用率：75%-90%
-                if 0.75 <= utilization <= 0.90:
+                # 优化后的利用率评分：更严格的容量匹配
+                if 0.80 <= utilization <= 0.95:
+                    # 最佳区间：80%-95%利用率
                     return (
-                        abs(0.825 - utilization) + preference_bonus
-                    )  # 最接近82.5%的最好
-                elif 0.60 <= utilization < 0.75:
-                    return 0.15 + abs(0.675 - utilization) + preference_bonus  # 次优
-                elif 0.90 < utilization <= 1.0:
-                    return 0.10 + abs(0.95 - utilization) + preference_bonus  # 可接受
+                        abs(0.875 - utilization) + preference_bonus
+                    )  # 最接近87.5%的最好
+                elif 0.70 <= utilization < 0.80:
+                    # 次优区间：70%-80%
+                    return 0.10 + abs(0.75 - utilization) + preference_bonus
+                elif 0.95 < utilization <= 1.0:
+                    # 可接受区间：95%-100%（接近满员）
+                    return 0.08 + abs(0.975 - utilization) + preference_bonus
+                elif 0.60 <= utilization < 0.70:
+                    # 勉强可接受：60%-70%（有一定浪费）
+                    return 0.20 + abs(0.65 - utilization) + preference_bonus
                 else:
-                    # 利用率太低或超过容量，惩罚很大
-                    return 1.0 + abs(0.80 - utilization) + preference_bonus
+                    # 利用率过低（<60%）或理论上的过载（>100%），大幅惩罚
+                    return 1.0 + abs(0.85 - utilization) + preference_bonus
 
             classrooms_to_choose.sort(key=utilization_score)
             return classrooms_to_choose[0]

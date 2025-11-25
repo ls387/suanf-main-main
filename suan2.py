@@ -387,19 +387,85 @@ class SchedulingSystem:
     def _analyze_classroom_utilization(
         self, solution: List[Gene], task_dict: Dict, data: Dict
     ):
-        """分析教室利用率"""
+        """分析教室利用率和容量问题"""
         from collections import defaultdict
 
         classroom_usage = defaultdict(list)
+        capacity_violations = []  # 容量不足的课程
+        high_waste = []  # 容量浪费严重的课程
+        total_waste_seats = 0
 
         for gene in solution:
             task = task_dict[gene.task_id]
             classroom = data["classrooms"][gene.classroom_id]
 
+            # 检查容量冲突
+            if classroom.capacity < task.student_count:
+                capacity_violations.append(
+                    {
+                        "course": (
+                            data["courses"].get(task.offering.course_id).course_name
+                            if task.offering
+                            else "未知课程"
+                        ),
+                        "classroom": classroom.classroom_name,
+                        "capacity": classroom.capacity,
+                        "students": task.student_count,
+                        "shortage": task.student_count - classroom.capacity,
+                    }
+                )
+
             utilization = (
                 task.student_count / classroom.capacity if classroom.capacity > 0 else 0
             )
             classroom_usage[gene.classroom_id].append(utilization)
+
+            # 检查容量浪费
+            if classroom.capacity > 0:
+                waste_seats = classroom.capacity - task.student_count
+                total_waste_seats += waste_seats
+                waste_ratio = waste_seats / classroom.capacity
+
+                # 根据班级规模判断是否浪费过大
+                max_waste_ratio = (
+                    0.5
+                    if task.student_count < 30
+                    else (0.4 if task.student_count < 60 else 0.3)
+                )
+                if waste_ratio > max_waste_ratio:
+                    high_waste.append(
+                        {
+                            "course": (
+                                data["courses"].get(task.offering.course_id).course_name
+                                if task.offering
+                                else "未知课程"
+                            ),
+                            "classroom": classroom.classroom_name,
+                            "capacity": classroom.capacity,
+                            "students": task.student_count,
+                            "waste_seats": waste_seats,
+                            "waste_ratio": waste_ratio,
+                            "utilization": utilization,
+                        }
+                    )
+
+        # 报告容量冲突
+        if capacity_violations:
+            logger.error(f"\n【容量冲突检测】")
+            logger.error(f"⚠ 发现 {len(capacity_violations)} 个教室容量不足的问题:")
+            for i, item in enumerate(capacity_violations[:10], 1):
+                logger.error(
+                    f"  [{i}] {item['course']}: 教室 {item['classroom']} "
+                    f"(容量{item['capacity']}) < 学生数{item['students']}, "
+                    f"缺少 {item['shortage']} 个座位"
+                )
+            if len(capacity_violations) > 10:
+                logger.error(
+                    f"  ... 还有 {len(capacity_violations) - 10} 个容量不足问题"
+                )
+        else:
+            logger.info("\n【容量冲突检测】")
+            logger.info("✓ 所有教室容量充足，无容量冲突")
 
         # 计算平均利用率
         total_utilization = 0
@@ -412,7 +478,12 @@ class SchedulingSystem:
 
         if used_classrooms > 0:
             overall_utilization = total_utilization / used_classrooms
+            logger.info(f"\n【教室利用率分析】")
             logger.info(f"教室平均利用率: {overall_utilization:.1%}")
+            logger.info(f"总计浪费座位数: {total_waste_seats} 个")
+            logger.info(
+                f"平均每节课浪费: {total_waste_seats / len(solution):.1f} 个座位"
+            )
 
         # 找出利用率过低的教室
         low_utilization_classrooms = [
@@ -425,6 +496,24 @@ class SchedulingSystem:
             logger.warning(
                 f"发现 {len(low_utilization_classrooms)} 间教室利用率过低(<50%)"
             )
+
+        # 报告容量浪费情况
+        if high_waste:
+            logger.warning(f"\n【容量浪费检测】")
+            logger.warning(f"⚠ 发现 {len(high_waste)} 个教室容量浪费严重的课程:")
+            # 按浪费率排序
+            high_waste.sort(key=lambda x: x["waste_ratio"], reverse=True)
+            for i, item in enumerate(high_waste[:10], 1):
+                logger.warning(
+                    f"  [{i}] {item['course']}: 教室 {item['classroom']} "
+                    f"(容量{item['capacity']}) > 学生数{item['students']}, "
+                    f"浪费 {item['waste_seats']} 个座位 (浪费率{item['waste_ratio']:.1%}, 利用率{item['utilization']:.1%})"
+                )
+            if len(high_waste) > 10:
+                logger.warning(f"  ... 还有 {len(high_waste) - 10} 个浪费严重的课程")
+        else:
+            logger.info("\n【容量浪费检测】")
+            logger.info("✓ 教室容量分配合理，无严重浪费")
 
     def _analyze_preference_satisfaction(
         self, solution: List[Gene], task_dict: Dict, data: Dict

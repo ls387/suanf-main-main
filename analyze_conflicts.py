@@ -297,6 +297,139 @@ def analyze_schedule_conflicts(version_id):
         print(f"排课版本 {version_id} 冲突分析报告")
         print("=" * 80)
 
+        # 分析容量冲突和浪费
+        print("\n【教室容量分析】")
+        capacity_violations = []  # 容量不足
+        capacity_conflicts_data = []  # 容量冲突数据（用于优化）
+        high_waste = []  # 容量浪费严重
+        high_waste_data = []  # 容量浪费数据（用于优化）
+        total_waste_seats = 0
+
+        # 获取学生人数信息
+        for result in results:
+            # 查询该任务的学生总数
+            student_query = """
+            SELECT SUM(cl.student_count) as total_students
+            FROM offering_classes oc
+            JOIN classes cl ON oc.class_id = cl.class_id
+            JOIN teaching_tasks tt ON oc.offering_id = tt.offering_id
+            WHERE tt.task_id = %s
+            """
+            cursor.execute(student_query, (result["task_id"],))
+            student_result = cursor.fetchone()
+            student_count = int(student_result["total_students"] or 0)  # 转换为整数
+
+            # 查询教室容量
+            classroom_query = "SELECT capacity FROM classrooms WHERE classroom_id = %s"
+            cursor.execute(classroom_query, (result["classroom_id"],))
+            classroom_result = cursor.fetchone()
+            classroom_capacity = (
+                int(classroom_result["capacity"]) if classroom_result else 0
+            )  # 转换为整数
+
+            # 检查容量冲突
+            if classroom_capacity < student_count:
+                capacity_violations.append(
+                    {
+                        "course": result["course_name"],
+                        "classroom": result["classroom_name"],
+                        "capacity": classroom_capacity,
+                        "students": student_count,
+                        "shortage": student_count - classroom_capacity,
+                    }
+                )
+                # 记录详细数据用于优化
+                capacity_conflicts_data.append(
+                    {
+                        "schedule_id": result["schedule_id"],
+                        "task_id": result["task_id"],
+                        "course": result["course_name"],
+                        "classroom_id": result["classroom_id"],
+                        "classroom": result["classroom_name"],
+                        "capacity": classroom_capacity,
+                        "students": student_count,
+                        "shortage": student_count - classroom_capacity,
+                        "weekday": result["week_day"],
+                        "start_slot": result["start_slot"],
+                        "slots_count": result["slots_count"],
+                    }
+                )
+
+            # 检查容量浪费
+            if classroom_capacity > 0 and student_count > 0:
+                waste_seats = classroom_capacity - student_count
+                total_waste_seats += waste_seats
+                waste_ratio = waste_seats / classroom_capacity
+                utilization = student_count / classroom_capacity
+
+                # 根据班级规模判断是否浪费过大
+                max_waste_ratio = (
+                    0.5 if student_count < 30 else (0.4 if student_count < 60 else 0.3)
+                )
+                if waste_ratio > max_waste_ratio:
+                    high_waste.append(
+                        {
+                            "course": result["course_name"],
+                            "classroom": result["classroom_name"],
+                            "capacity": classroom_capacity,
+                            "students": student_count,
+                            "waste_seats": waste_seats,
+                            "waste_ratio": waste_ratio,
+                            "utilization": utilization,
+                        }
+                    )
+                    # 记录详细数据用于优化
+                    high_waste_data.append(
+                        {
+                            "schedule_id": result["schedule_id"],
+                            "task_id": result["task_id"],
+                            "course": result["course_name"],
+                            "classroom_id": result["classroom_id"],
+                            "classroom": result["classroom_name"],
+                            "capacity": classroom_capacity,
+                            "students": student_count,
+                            "waste_seats": waste_seats,
+                            "waste_ratio": waste_ratio,
+                            "weekday": result["week_day"],
+                            "start_slot": result["start_slot"],
+                            "slots_count": result["slots_count"],
+                        }
+                    )
+
+        # 报告容量冲突
+        if capacity_violations:
+            print(f"\n容量不足冲突: {len(capacity_violations)} 个")
+            for i, item in enumerate(capacity_violations[:10], 1):
+                print(
+                    f"  [{i}] {item['course']}: 教室 {item['classroom']} "
+                    f"(容量{item['capacity']}) < 学生数{item['students']}, "
+                    f"缺少 {item['shortage']} 个座位"
+                )
+            if len(capacity_violations) > 10:
+                print(f"  ... 还有 {len(capacity_violations) - 10} 个容量不足问题")
+        else:
+            print("✓ 无容量不足问题")
+
+        # 报告容量浪费
+        print(f"\n总计浪费座位数: {total_waste_seats} 个")
+        if len(results) > 0:
+            print(f"平均每节课浪费: {total_waste_seats / len(results):.1f} 个座位")
+
+        if high_waste:
+            print(f"\n容量浪费严重课程: {len(high_waste)} 个")
+            # 按浪费率排序
+            high_waste.sort(key=lambda x: x["waste_ratio"], reverse=True)
+            for i, item in enumerate(high_waste[:10], 1):
+                print(
+                    f"  [{i}] {item['course']}: 教室 {item['classroom']} "
+                    f"(容量{item['capacity']}) > 学生数{item['students']}, "
+                    f"浪费 {item['waste_seats']} 个座位 (浪费率{item['waste_ratio']:.1%}, 利用率{item['utilization']:.1%})"
+                )
+            if len(high_waste) > 10:
+                print(f"  ... 还有 {len(high_waste) - 10} 个浪费严重的课程")
+        else:
+            print("✓ 无严重容量浪费")
+
         # 分析班级冲突
         print("\n【班级时间冲突分析】")
         class_schedule = defaultdict(list)
@@ -660,7 +793,12 @@ def analyze_schedule_conflicts(version_id):
         print("=" * 80)
 
         # 导出冲突Excel
-        total_conflicts = conflicts_found + teacher_conflicts + classroom_conflicts
+        total_conflicts = (
+            conflicts_found
+            + teacher_conflicts
+            + classroom_conflicts
+            + len(capacity_violations)
+        )
         if total_conflicts > 0:
             export_conflicts_to_excel(
                 class_conflicts_data,
@@ -680,6 +818,8 @@ def analyze_schedule_conflicts(version_id):
                     class_conflicts_data,
                     teacher_conflicts_data,
                     classroom_conflicts_data,
+                    capacity_conflicts_data,
+                    high_waste_data,
                     cursor,
                     conn,
                 )
@@ -708,17 +848,145 @@ def optimize_conflicts(
     class_conflicts_data,
     teacher_conflicts_data,
     classroom_conflicts_data,
+    capacity_conflicts_data,
+    high_waste_data,
     cursor,
     conn,
 ):
-    """优化冲突课程 - 分两阶段：1.解决硬约束冲突 2.满足个性化要求"""
+    """优化冲突课程 - 分三阶段：1.解决容量冲突 2.解决时间冲突 3.优化利用率和个性化要求"""
     print("\n" + "=" * 80)
-    print("开始优化冲突（两阶段策略）...")
-    print("第一阶段：解决硬约束冲突（教师/班级/教室时间冲突）")
-    print("第二阶段：在不违反硬约束的前提下满足个性化要求")
+    print("开始优化冲突（三阶段策略）...")
+    print("第一阶段：解决容量不足冲突（硬约束）")
+    print("第二阶段：解决教师/班级/教室时间冲突（硬约束）")
+    print("第三阶段：优化容量利用率和满足个性化要求（软约束）")
     print("=" * 80)
 
-    # 收集所有有冲突的 schedule_id
+    # ========== 第一阶段：优化容量不足冲突（最高优先级） ==========
+    capacity_adjustments = []
+    day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+    if capacity_conflicts_data:
+        print(f"\n第一阶段：解决 {len(capacity_conflicts_data)} 个容量不足冲突...")
+
+        # 获取所有可用教室
+        cursor.execute(
+            "SELECT classroom_id, classroom_name, capacity, campus_id FROM classrooms ORDER BY capacity"
+        )
+        all_classrooms = cursor.fetchall()
+
+        for cap_conflict in capacity_conflicts_data:
+            schedule_id = cap_conflict["schedule_id"]
+            current_classroom_id = cap_conflict["classroom_id"]
+            required_capacity = int(cap_conflict["students"])  # 转换为整数
+            weekday = cap_conflict["weekday"]
+            start_slot = cap_conflict["start_slot"]
+            slots_count = cap_conflict["slots_count"]
+            end_slot = start_slot + slots_count - 1
+
+            print(f"\n为 {cap_conflict['course']} 寻找更大的教室...")
+            print(
+                f"  当前教室: {cap_conflict['classroom']} (容量{cap_conflict['capacity']})"
+            )
+            print(f"  需要容量: {required_capacity}")
+
+            # 查询该时间段被占用的教室
+            occupied_classrooms_query = """
+            SELECT DISTINCT classroom_id 
+            FROM schedules 
+            WHERE version_id = %s 
+                AND week_day = %s 
+                AND schedule_id != %s
+                AND (
+                    (start_slot <= %s AND start_slot + 
+                        (SELECT slots_count FROM teaching_tasks WHERE task_id = schedules.task_id) - 1 >= %s)
+                    OR (start_slot >= %s AND start_slot <= %s)
+                )
+            """
+            cursor.execute(
+                occupied_classrooms_query,
+                (
+                    version_id,
+                    weekday,
+                    schedule_id,
+                    start_slot,
+                    start_slot,
+                    start_slot,
+                    end_slot,
+                ),
+            )
+            occupied = {row["classroom_id"] for row in cursor.fetchall()}
+
+            # 寻找容量足够且未被占用的教室
+            suitable_classrooms = [
+                room
+                for room in all_classrooms
+                if room["capacity"] >= required_capacity
+                and room["classroom_id"] not in occupied
+                and room["classroom_id"] != current_classroom_id
+            ]
+
+            if suitable_classrooms:
+                # 选择容量最接近（但足够）的教室，避免浪费
+                best_classroom = min(suitable_classrooms, key=lambda r: r["capacity"])
+                utilization = (
+                    required_capacity / best_classroom["capacity"]
+                    if best_classroom["capacity"] > 0
+                    else 0
+                )
+
+                capacity_adjustments.append(
+                    {
+                        "schedule_id": schedule_id,
+                        "old_classroom_id": current_classroom_id,
+                        "old_classroom": cap_conflict["classroom"],
+                        "old_capacity": cap_conflict["capacity"],
+                        "new_classroom_id": best_classroom["classroom_id"],
+                        "new_classroom": best_classroom["classroom_name"],
+                        "new_capacity": best_classroom["capacity"],
+                        "students": required_capacity,
+                        "utilization": utilization,
+                        "course": cap_conflict["course"],
+                        "time": f"{day_names[weekday]} 第{start_slot}-{end_slot}节",
+                    }
+                )
+
+                print(
+                    f"  ✓ 找到合适教室: {best_classroom['classroom_name']} (容量{best_classroom['capacity']}, 利用率{utilization:.1%})"
+                )
+            else:
+                print(f"  ✗ 未找到合适的教室（该时间段容量足够的教室都已被占用）")
+
+        # 应用容量调整
+        if capacity_adjustments:
+            print(f"\n找到 {len(capacity_adjustments)} 个容量优化方案:")
+            for i, adj in enumerate(capacity_adjustments, 1):
+                print(
+                    f"  [{i}] {adj['course']}: {adj['time']}\n"
+                    f"      {adj['old_classroom']} (容量{adj['old_capacity']}) → "
+                    f"{adj['new_classroom']} (容量{adj['new_capacity']}, 利用率{adj['utilization']:.1%})"
+                )
+
+            confirm = input("\n确认应用这些容量优化? (y/n): ").strip().lower()
+            if confirm == "y":
+                for adj in capacity_adjustments:
+                    update_query = (
+                        "UPDATE schedules SET classroom_id = %s WHERE schedule_id = %s"
+                    )
+                    cursor.execute(
+                        update_query, (adj["new_classroom_id"], adj["schedule_id"])
+                    )
+
+                conn.commit()
+                print(f"✓ 已应用 {len(capacity_adjustments)} 个容量优化")
+            else:
+                print("已取消容量优化")
+        else:
+            print("\n⚠ 未找到可行的容量优化方案")
+    else:
+        print("\n第一阶段：✓ 无容量不足冲突")
+
+    # ========== 第二阶段：优化时间冲突 ==========
+    # 收集所有有时间冲突的 schedule_id
     conflict_schedule_ids = set()
 
     # 从班级冲突中提取（items中已包含schedule_id）
@@ -739,7 +1007,7 @@ def optimize_conflicts(
             if "schedule_id" in item:
                 conflict_schedule_ids.add(item["schedule_id"])
 
-    print(f"\n第一阶段：识别到 {len(conflict_schedule_ids)} 个有硬约束冲突的课程安排")
+    print(f"\n第二阶段：识别到 {len(conflict_schedule_ids)} 个有时间冲突的课程安排")
 
     if len(conflict_schedule_ids) == 0:
         print("✓ 没有硬约束冲突")
@@ -966,14 +1234,16 @@ def optimize_conflicts(
 
             conn.commit()
             print(
-                f"\n✓ 第一阶段完成：已成功调整 {len(adjustments)} 个课程安排，解决硬约束冲突"
+                f"\n✓ 第二阶段完成：已成功调整 {len(adjustments)} 个课程安排，解决时间冲突"
             )
 
-            # 第二阶段：优化个性化要求
+            # 第三阶段：优化容量利用率和个性化要求
             print("\n" + "=" * 80)
-            print("第二阶段：优化个性化要求（教师偏好时间）")
+            print("第三阶段：优化容量利用率和个性化要求")
             print("=" * 80)
-            optimize_preferences(version_id, results, task_classes, cursor, conn)
+            optimize_utilization_and_preferences(
+                version_id, results, task_classes, high_waste_data, cursor, conn
+            )
         else:
             print("\n已取消调整")
     else:
@@ -982,6 +1252,157 @@ def optimize_conflicts(
         print("  1. 检查教室资源是否充足")
         print("  2. 检查教师时间是否过于紧张")
         print("  3. 考虑调整课程节数或增加教室/教师资源")
+
+
+def optimize_utilization_and_preferences(
+    version_id, results, task_classes, high_waste_data, cursor, conn
+):
+    """第三阶段：优化容量利用率，然后优化个性化要求"""
+
+    # 先优化利用率
+    if high_waste_data:
+        print(f"\n发现 {len(high_waste_data)} 个容量浪费严重的课程，尝试优化...")
+
+        # 获取所有教室
+        cursor.execute(
+            "SELECT classroom_id, classroom_name, capacity, campus_id FROM classrooms ORDER BY capacity"
+        )
+        all_classrooms = cursor.fetchall()
+
+        utilization_adjustments = []
+        day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+        # 跟踪本批次中已分配的教室（避免重复分配）
+        # allocated_classrooms[(weekday, slot)] = set(classroom_ids)
+        # 使用单个时间槽而不是时间段，以便正确检测重叠
+        from collections import defaultdict
+
+        allocated_classrooms = defaultdict(set)
+
+        for waste in high_waste_data[:20]:  # 限制优化前20个最严重的
+            schedule_id = waste["schedule_id"]
+            current_classroom_id = waste["classroom_id"]
+            student_count = int(waste["students"])  # 转换为整数
+            weekday = waste["weekday"]
+            start_slot = waste["start_slot"]
+            slots_count = waste["slots_count"]
+            end_slot = start_slot + slots_count - 1
+
+            # 查询该时间段被占用的教室（包括数据库中的和本批次中已分配的）
+            occupied_classrooms_query = """
+            SELECT DISTINCT classroom_id 
+            FROM schedules 
+            WHERE version_id = %s 
+                AND week_day = %s 
+                AND schedule_id != %s
+                AND (
+                    (start_slot <= %s AND start_slot + 
+                        (SELECT slots_count FROM teaching_tasks WHERE task_id = schedules.task_id) - 1 >= %s)
+                    OR (start_slot >= %s AND start_slot <= %s)
+                )
+            """
+            cursor.execute(
+                occupied_classrooms_query,
+                (
+                    version_id,
+                    weekday,
+                    schedule_id,
+                    start_slot,
+                    start_slot,
+                    start_slot,
+                    end_slot,
+                ),
+            )
+            occupied = {row["classroom_id"] for row in cursor.fetchall()}
+
+            # 合并本批次中已分配的教室（检查所有重叠的时间槽）
+            for slot in range(start_slot, end_slot + 1):
+                occupied.update(allocated_classrooms[(weekday, slot)])
+
+            # 寻找容量更合适的教室（利用率在80%-95%之间）
+            target_min_capacity = int(student_count / 0.95)  # 最小容量（达到95%利用率）
+            target_max_capacity = int(student_count / 0.80)  # 最大容量（达到80%利用率）
+
+            suitable_classrooms = [
+                room
+                for room in all_classrooms
+                if target_min_capacity <= room["capacity"] <= target_max_capacity
+                and room["classroom_id"] not in occupied
+                and room["classroom_id"] != current_classroom_id
+            ]
+
+            if suitable_classrooms:
+                # 选择利用率最接近87.5%的教室
+                best_classroom = min(
+                    suitable_classrooms,
+                    key=lambda r: (
+                        abs(student_count / r["capacity"] - 0.875)
+                        if r["capacity"] > 0
+                        else 999
+                    ),
+                )
+                new_utilization = (
+                    student_count / best_classroom["capacity"]
+                    if best_classroom["capacity"] > 0
+                    else 0
+                )
+
+                # 只有当新利用率明显更好时才调整
+                if new_utilization > waste["waste_ratio"] + 0.1:  # 至少提升10%
+                    utilization_adjustments.append(
+                        {
+                            "schedule_id": schedule_id,
+                            "course": waste["course"],
+                            "old_classroom": waste["classroom"],
+                            "old_capacity": waste["capacity"],
+                            "old_utilization": 1 - waste["waste_ratio"],
+                            "new_classroom_id": best_classroom["classroom_id"],
+                            "new_classroom": best_classroom["classroom_name"],
+                            "new_capacity": best_classroom["capacity"],
+                            "new_utilization": new_utilization,
+                            "students": student_count,
+                            "time": f"{day_names[weekday]} 第{start_slot}-{end_slot}节",
+                        }
+                    )
+                    # 标记该教室在此时间段的所有时间槽已被本批次分配
+                    for slot in range(start_slot, end_slot + 1):
+                        allocated_classrooms[(weekday, slot)].add(
+                            best_classroom["classroom_id"]
+                        )
+
+        if utilization_adjustments:
+            print(f"\n找到 {len(utilization_adjustments)} 个利用率优化方案:")
+            for i, adj in enumerate(utilization_adjustments, 1):
+                print(
+                    f"  [{i}] {adj['course']}: {adj['time']}\n"
+                    f"      {adj['old_classroom']} (容量{adj['old_capacity']}, 利用率{adj['old_utilization']:.1%}) → "
+                    f"{adj['new_classroom']} (容量{adj['new_capacity']}, 利用率{adj['new_utilization']:.1%})"
+                )
+
+            confirm = input("\n确认应用这些利用率优化? (y/n): ").strip().lower()
+            if confirm == "y":
+                for adj in utilization_adjustments:
+                    update_query = (
+                        "UPDATE schedules SET classroom_id = %s WHERE schedule_id = %s"
+                    )
+                    cursor.execute(
+                        update_query, (adj["new_classroom_id"], adj["schedule_id"])
+                    )
+
+                conn.commit()
+                print(f"✓ 已应用 {len(utilization_adjustments)} 个利用率优化")
+            else:
+                print("已取消利用率优化")
+        else:
+            print("\n未找到可以进一步优化利用率的方案")
+    else:
+        print("\n✓ 容量利用率已经很好，无需优化")
+
+    # 然后优化个性化要求
+    print("\n" + "-" * 80)
+    print("优化个性化要求（教师偏好时间）")
+    print("-" * 80)
+    optimize_preferences(version_id, results, task_classes, cursor, conn)
 
 
 def optimize_preferences(version_id, results, task_classes, cursor, conn):
