@@ -37,7 +37,11 @@ def has_week_overlap(weeks1, weeks2):
 
 
 def export_conflicts_to_excel(
-    class_conflicts, teacher_conflicts, classroom_conflicts, version_id
+    class_conflicts,
+    teacher_conflicts,
+    classroom_conflicts,
+    capacity_violations,
+    version_id,
 ):
     """导出冲突到Excel"""
     wb = Workbook()
@@ -188,6 +192,47 @@ def export_conflicts_to_excel(
     for col in ["E", "F", "G", "H"]:
         ws3.column_dimensions[col].width = 20
 
+    # 容量不足冲突表
+    ws4 = wb.create_sheet("容量不足冲突")
+    ws4.append(
+        ["序号", "课程", "星期", "节次", "教室", "教室容量", "学生数", "缺少座位"]
+    )
+    for col in range(1, 9):
+        ws4.cell(1, col).fill = header_fill
+        ws4.cell(1, col).font = header_font
+        ws4.cell(1, col).alignment = Alignment(horizontal="center", vertical="center")
+
+    for idx, item in enumerate(capacity_violations, 1):
+        # 格式化时间段
+        time_range = (
+            f"{item['start_slot']}-{item['end_slot']}节"
+            if item["start_slot"] != item["end_slot"]
+            else f"{item['start_slot']}节"
+        )
+        ws4.append(
+            [
+                idx,
+                item["course"],
+                day_names[item["weekday"]],
+                time_range,
+                item["classroom"],
+                item["capacity"],
+                item["students"],
+                item["shortage"],
+            ]
+        )
+        for col in range(1, 9):
+            ws4.cell(idx + 1, col).fill = conflict_fill
+
+    ws4.column_dimensions["A"].width = 8
+    ws4.column_dimensions["B"].width = 20
+    ws4.column_dimensions["C"].width = 8
+    ws4.column_dimensions["D"].width = 10
+    ws4.column_dimensions["E"].width = 15
+    ws4.column_dimensions["F"].width = 10
+    ws4.column_dimensions["G"].width = 10
+    ws4.column_dimensions["H"].width = 12
+
     # 保存文件
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"排课冲突报告_版本{version_id}_{timestamp}.xlsx"
@@ -329,6 +374,7 @@ def analyze_schedule_conflicts(version_id):
 
             # 检查容量冲突
             if classroom_capacity < student_count:
+                end_slot = result["start_slot"] + result["slots_count"] - 1
                 capacity_violations.append(
                     {
                         "course": result["course_name"],
@@ -336,6 +382,9 @@ def analyze_schedule_conflicts(version_id):
                         "capacity": classroom_capacity,
                         "students": student_count,
                         "shortage": student_count - classroom_capacity,
+                        "weekday": result["week_day"],
+                        "start_slot": result["start_slot"],
+                        "end_slot": end_slot,
                     }
                 )
                 # 记录详细数据用于优化
@@ -804,6 +853,7 @@ def analyze_schedule_conflicts(version_id):
                 class_conflicts_data,
                 teacher_conflicts_data,
                 classroom_conflicts_data,
+                capacity_violations,
                 version_id,
             )
 
@@ -874,6 +924,11 @@ def optimize_conflicts(
         )
         all_classrooms = cursor.fetchall()
 
+        # 跟踪本批次中已分配的教室（避免重复分配）
+        from collections import defaultdict
+
+        batch_allocated = defaultdict(set)  # (weekday, slot) -> set(classroom_ids)
+
         for cap_conflict in capacity_conflicts_data:
             schedule_id = cap_conflict["schedule_id"]
             current_classroom_id = cap_conflict["classroom_id"]
@@ -916,6 +971,10 @@ def optimize_conflicts(
             )
             occupied = {row["classroom_id"] for row in cursor.fetchall()}
 
+            # 添加本批次中已分配的教室到占用列表
+            for slot in range(start_slot, end_slot + 1):
+                occupied.update(batch_allocated[(weekday, slot)])
+
             # 寻找容量足够且未被占用的教室
             suitable_classrooms = [
                 room
@@ -949,6 +1008,10 @@ def optimize_conflicts(
                         "time": f"{day_names[weekday]} 第{start_slot}-{end_slot}节",
                     }
                 )
+
+                # 标记本批次中该教室在这些时间槽已被占用
+                for slot in range(start_slot, end_slot + 1):
+                    batch_allocated[(weekday, slot)].add(best_classroom["classroom_id"])
 
                 print(
                     f"  ✓ 找到合适教室: {best_classroom['classroom_name']} (容量{best_classroom['capacity']}, 利用率{utilization:.1%})"
@@ -1244,6 +1307,12 @@ def optimize_conflicts(
             optimize_utilization_and_preferences(
                 version_id, results, task_classes, high_waste_data, cursor, conn
             )
+
+            # 优化完成后，重新生成冲突报告
+            print("\n" + "=" * 80)
+            print("重新生成优化后的冲突报告...")
+            print("=" * 80)
+            regenerate_conflict_report_after_optimization(version_id, cursor)
         else:
             print("\n已取消调整")
     else:
@@ -2094,6 +2163,271 @@ def show_remaining_preference_violations(version_id, cursor):
             print("    1. 放宽部分个性化要求的时间范围")
             print("    2. 降低部分个性化要求的优先级（penalty_score）")
             print("    3. 增加可用教室或调整课程时间安排")
+
+
+def regenerate_conflict_report_after_optimization(version_id, cursor):
+    """优化后重新生成冲突报告和导出Excel"""
+    from collections import defaultdict
+
+    # 重新获取优化后的排课结果
+    query = """
+    SELECT 
+        sr.schedule_id,
+        sr.task_id,
+        sr.classroom_id,
+        sr.week_day,
+        sr.start_slot,
+        tt.slots_count,
+        tt.offering_id,
+        c.course_name,
+        cr.classroom_name,
+        co.start_week,
+        co.end_week,
+        co.week_pattern,
+        GROUP_CONCAT(DISTINCT t.teacher_name SEPARATOR ', ') AS teacher_name,
+        GROUP_CONCAT(DISTINCT t.teacher_id SEPARATOR ', ') AS teacher_ids
+    FROM schedules sr
+    JOIN teaching_tasks tt ON sr.task_id = tt.task_id
+    JOIN course_offerings co ON tt.offering_id = co.offering_id
+    JOIN courses c ON co.course_id = c.course_id
+    JOIN classrooms cr ON sr.classroom_id = cr.classroom_id
+    LEFT JOIN offering_teachers ot ON co.offering_id = ot.offering_id
+    LEFT JOIN teachers t ON ot.teacher_id = t.teacher_id
+    WHERE sr.version_id = %s
+    GROUP BY sr.schedule_id, sr.task_id, sr.classroom_id, sr.week_day, sr.start_slot,
+             tt.slots_count, tt.offering_id, c.course_name, cr.classroom_name,
+             co.start_week, co.end_week, co.week_pattern
+    ORDER BY sr.week_day, sr.start_slot
+    """
+    cursor.execute(query, (version_id,))
+    results = cursor.fetchall()
+
+    # 重新分析冲突（使用简化版本，只分析不执行优化）
+    print(f"\n优化后的排课统计：")
+    print(f"  - 总课程数: {len(results)}")
+
+    # 分析班级、教师、教室冲突
+    class_conflicts_data = []
+    teacher_conflicts_data = []
+    classroom_conflicts_data = []
+    capacity_violations = []
+
+    # 加载offering_weeks数据
+    cursor.execute("SELECT offering_id, week_number FROM offering_weeks")
+    offering_weeks = {}
+    for row in cursor.fetchall():
+        offering_id = row["offering_id"]
+        week_number = row["week_number"]
+        if offering_id not in offering_weeks:
+            offering_weeks[offering_id] = set()
+        offering_weeks[offering_id].add(week_number)
+
+    def get_weeks(result):
+        """根据offering_id获取周次集合"""
+        offering_id = result["offering_id"]
+        if offering_id in offering_weeks:
+            return offering_weeks[offering_id]
+
+        start_week = result.get("start_week") or 1
+        end_week = result.get("end_week") or 18
+        week_pattern = result.get("week_pattern") or "CONTINUOUS"
+
+        if week_pattern == "CONTINUOUS":
+            return set(range(start_week, end_week + 1))
+        elif week_pattern == "SINGLE":
+            return set(w for w in range(start_week, end_week + 1) if w % 2 == 1)
+        elif week_pattern == "DOUBLE":
+            return set(w for w in range(start_week, end_week + 1) if w % 2 == 0)
+        else:
+            return set(range(start_week, end_week + 1))
+
+    # 获取任务-班级关系
+    task_classes = defaultdict(list)
+    for result in results:
+        task_id = result["task_id"]
+        class_query = """
+        SELECT cl.class_id, cl.class_name
+        FROM offering_classes oc
+        JOIN classes cl ON oc.class_id = cl.class_id
+        JOIN teaching_tasks tt ON oc.offering_id = tt.offering_id
+        WHERE tt.task_id = %s
+        """
+        cursor.execute(class_query, (task_id,))
+        classes = cursor.fetchall()
+        task_classes[task_id] = classes
+
+    # 检查容量冲突
+    for result in results:
+        student_query = """
+        SELECT SUM(cl.student_count) as total_students
+        FROM offering_classes oc
+        JOIN classes cl ON oc.class_id = cl.class_id
+        JOIN teaching_tasks tt ON oc.offering_id = tt.offering_id
+        WHERE tt.task_id = %s
+        """
+        cursor.execute(student_query, (result["task_id"],))
+        student_result = cursor.fetchone()
+        student_count = int(student_result["total_students"] or 0)
+
+        classroom_query = "SELECT capacity FROM classrooms WHERE classroom_id = %s"
+        cursor.execute(classroom_query, (result["classroom_id"],))
+        classroom_result = cursor.fetchone()
+        classroom_capacity = (
+            int(classroom_result["capacity"]) if classroom_result else 0
+        )
+
+        if classroom_capacity < student_count:
+            end_slot = result["start_slot"] + result["slots_count"] - 1
+            capacity_violations.append(
+                {
+                    "course": result["course_name"],
+                    "classroom": result["classroom_name"],
+                    "capacity": classroom_capacity,
+                    "students": student_count,
+                    "shortage": student_count - classroom_capacity,
+                    "weekday": result["week_day"],
+                    "start_slot": result["start_slot"],
+                    "end_slot": end_slot,
+                }
+            )
+
+    # 检查时间冲突（简化版）
+    class_schedule = defaultdict(lambda: defaultdict(list))
+    teacher_schedule = defaultdict(lambda: defaultdict(list))
+    classroom_schedule = defaultdict(lambda: defaultdict(list))
+
+    for result in results:
+        start_slot = result["start_slot"]
+        end_slot = start_slot + result["slots_count"] - 1
+        weekday = result["week_day"]
+        weeks = get_weeks(result)
+
+        for slot in range(start_slot, end_slot + 1):
+            # 班级冲突
+            for cls in task_classes[result["task_id"]]:
+                class_schedule[cls["class_id"]][(weekday, slot)].append((result, weeks))
+
+            # 教师冲突
+            if result["teacher_ids"]:
+                for teacher_id in result["teacher_ids"].split(", "):
+                    teacher_schedule[teacher_id][(weekday, slot)].append(
+                        (result, weeks)
+                    )
+
+            # 教室冲突
+            classroom_schedule[result["classroom_id"]][(weekday, slot)].append(
+                (result, weeks)
+            )
+
+    # 统计冲突数量
+    def count_conflicts_optimized(schedule_dict):
+        """优化后的冲突统计"""
+        conflicts = 0
+        for entity_id, time_dict in schedule_dict.items():
+            for time_key, items in time_dict.items():
+                if len(items) > 1:
+                    # 检查周次重叠
+                    has_overlap = False
+                    for i in range(len(items)):
+                        for j in range(i + 1, len(items)):
+                            weeks1 = items[i][1]
+                            weeks2 = items[j][1]
+                            if weeks1 & weeks2:  # 有交集
+                                has_overlap = True
+                                break
+                        if has_overlap:
+                            break
+                    if has_overlap:
+                        conflicts += 1
+        return conflicts
+
+    class_conflicts = count_conflicts_optimized(class_schedule)
+    teacher_conflicts = count_conflicts_optimized(teacher_schedule)
+    classroom_conflicts = count_conflicts_optimized(classroom_schedule)
+
+    print(f"  - 班级冲突: {class_conflicts}")
+    print(f"  - 教师冲突: {teacher_conflicts}")
+    print(f"  - 教室冲突: {classroom_conflicts}")
+    print(f"  - 容量不足: {len(capacity_violations)}")
+
+    total_conflicts = (
+        class_conflicts
+        + teacher_conflicts
+        + classroom_conflicts
+        + len(capacity_violations)
+    )
+
+    if total_conflicts == 0:
+        print("\n✅ 优化成功！所有硬冲突已解决")
+    else:
+        print(f"\n⚠️  仍有 {total_conflicts} 处冲突需要人工处理")
+
+    # 导出优化后的报告（简化版，只包含剩余冲突）
+    if capacity_violations:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from datetime import datetime
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "优化后剩余容量冲突"
+
+        header_fill = PatternFill(
+            start_color="4472C4", end_color="4472C4", fill_type="solid"
+        )
+        header_font = Font(color="FFFFFF", bold=True, size=11)
+        conflict_fill = PatternFill(
+            start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
+        )
+
+        day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+        ws.append(
+            ["序号", "课程", "星期", "节次", "教室", "教室容量", "学生数", "缺少座位"]
+        )
+        for col in range(1, 9):
+            ws.cell(1, col).fill = header_fill
+            ws.cell(1, col).font = header_font
+            ws.cell(1, col).alignment = Alignment(
+                horizontal="center", vertical="center"
+            )
+
+        for idx, item in enumerate(capacity_violations, 1):
+            time_range = (
+                f"{item['start_slot']}-{item['end_slot']}节"
+                if item["start_slot"] != item["end_slot"]
+                else f"{item['start_slot']}节"
+            )
+            ws.append(
+                [
+                    idx,
+                    item["course"],
+                    day_names[item["weekday"]],
+                    time_range,
+                    item["classroom"],
+                    item["capacity"],
+                    item["students"],
+                    item["shortage"],
+                ]
+            )
+            for col in range(1, 9):
+                ws.cell(idx + 1, col).fill = conflict_fill
+
+        ws.column_dimensions["A"].width = 8
+        ws.column_dimensions["B"].width = 20
+        ws.column_dimensions["C"].width = 8
+        ws.column_dimensions["D"].width = 10
+        ws.column_dimensions["E"].width = 15
+        ws.column_dimensions["F"].width = 10
+        ws.column_dimensions["G"].width = 10
+        ws.column_dimensions["H"].width = 12
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"优化后冲突报告_版本{version_id}_{timestamp}.xlsx"
+        wb.save(filename)
+        print(f"\n✓ 优化后冲突报告已导出到: {filename}")
+    else:
+        print("\n✓ 无需导出报告（所有容量冲突已解决）")
 
 
 if __name__ == "__main__":

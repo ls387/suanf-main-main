@@ -196,16 +196,20 @@ class SchedulingSystem:
         # 检查硬冲突
         conflicts = self._check_conflicts(solution, task_dict, data)
 
+        # 检查容量冲突（硬约束）
+        capacity_violations = self._check_capacity_violations(solution, task_dict, data)
+
         total_conflicts = (
             conflicts["teacher_count"]
             + conflicts["class_count"]
             + conflicts["classroom_count"]
+            + len(capacity_violations)  # 容量不足也是硬冲突
         )
 
         if total_conflicts == 0:
             logger.info("✓ 没有发现硬冲突")
         else:
-            logger.warning(f"⚠ 发现 {total_conflicts} 处冲突:")
+            logger.warning(f"⚠ 发现 {total_conflicts} 处硬冲突:")
 
             if conflicts["teacher_count"] > 0:
                 logger.warning(f"  - 教师冲突: {conflicts['teacher_count']} 处")
@@ -220,6 +224,19 @@ class SchedulingSystem:
                 self._print_conflict_details(
                     conflicts["classroom_details"], "教室", data
                 )
+
+            if len(capacity_violations) > 0:
+                logger.warning(f"  - 容量不足冲突: {len(capacity_violations)} 处")
+                for i, item in enumerate(capacity_violations[:5], 1):
+                    logger.warning(
+                        f"    [{i}] {item['course']}: 教室 {item['classroom']} "
+                        f"(容量{item['capacity']}) < 学生数{item['students']}, "
+                        f"缺少 {item['shortage']} 个座位"
+                    )
+                if len(capacity_violations) > 5:
+                    logger.warning(
+                        f"    ... 还有 {len(capacity_violations) - 5} 个容量不足问题"
+                    )
 
         # 教室利用率统计
         self._analyze_classroom_utilization(solution, task_dict, data)
@@ -384,22 +401,17 @@ class SchedulingSystem:
             "classroom_details": classroom_details,
         }
 
-    def _analyze_classroom_utilization(
+    def _check_capacity_violations(
         self, solution: List[Gene], task_dict: Dict, data: Dict
-    ):
-        """分析教室利用率和容量问题"""
-        from collections import defaultdict
-
-        classroom_usage = defaultdict(list)
-        capacity_violations = []  # 容量不足的课程
-        high_waste = []  # 容量浪费严重的课程
-        total_waste_seats = 0
+    ) -> List[Dict]:
+        """检查容量不足冲突（硬约束）"""
+        capacity_violations = []
 
         for gene in solution:
             task = task_dict[gene.task_id]
             classroom = data["classrooms"][gene.classroom_id]
 
-            # 检查容量冲突
+            # 检查容量是否足够
             if classroom.capacity < task.student_count:
                 capacity_violations.append(
                     {
@@ -414,6 +426,22 @@ class SchedulingSystem:
                         "shortage": task.student_count - classroom.capacity,
                     }
                 )
+
+        return capacity_violations
+
+    def _analyze_classroom_utilization(
+        self, solution: List[Gene], task_dict: Dict, data: Dict
+    ):
+        """分析教室利用率和容量浪费（软约束优化）"""
+        from collections import defaultdict
+
+        classroom_usage = defaultdict(list)
+        high_waste = []  # 容量浪费严重的课程
+        total_waste_seats = 0
+
+        for gene in solution:
+            task = task_dict[gene.task_id]
+            classroom = data["classrooms"][gene.classroom_id]
 
             utilization = (
                 task.student_count / classroom.capacity if classroom.capacity > 0 else 0
@@ -448,24 +476,6 @@ class SchedulingSystem:
                             "utilization": utilization,
                         }
                     )
-
-        # 报告容量冲突
-        if capacity_violations:
-            logger.error(f"\n【容量冲突检测】")
-            logger.error(f"⚠ 发现 {len(capacity_violations)} 个教室容量不足的问题:")
-            for i, item in enumerate(capacity_violations[:10], 1):
-                logger.error(
-                    f"  [{i}] {item['course']}: 教室 {item['classroom']} "
-                    f"(容量{item['capacity']}) < 学生数{item['students']}, "
-                    f"缺少 {item['shortage']} 个座位"
-                )
-            if len(capacity_violations) > 10:
-                logger.error(
-                    f"  ... 还有 {len(capacity_violations) - 10} 个容量不足问题"
-                )
-        else:
-            logger.info("\n【容量冲突检测】")
-            logger.info("✓ 所有教室容量充足，无容量冲突")
 
         # 计算平均利用率
         total_utilization = 0
