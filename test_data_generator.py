@@ -14,7 +14,7 @@ def connect_db():
     return pymysql.connect(
         host="localhost",
         user="root",
-        password="root",
+        password="123456",
         database="paike",
         charset="utf8mb4",
     )

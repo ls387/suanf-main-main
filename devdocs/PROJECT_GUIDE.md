@@ -5,6 +5,7 @@
 这是一个基于遗传算法的智能排课系统，包含完整的前后端实现。
 
 ### 技术栈
+
 - **后端**: FastAPI + PyMySQL + 遗传算法
 - **前端**: Vue 3 + Vite + Element Plus
 - **数据库**: MySQL
@@ -16,10 +17,10 @@
 ```bash
 # 创建数据库
 mysql -u root -p
-CREATE DATABASE paike2 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE paike CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 # 导入表结构
-mysql -u root -p paike2 < 表3.txt
+mysql -u root -p paike < 表3.txt
 
 # 生成测试数据（可选）
 python test_data_generator.py
@@ -36,8 +37,8 @@ pip install -r requirements.txt
 # 配置数据库（修改 .env 文件或使用默认配置）
 # DB_HOST=localhost
 # DB_USER=root
-# DB_PASSWORD=root
-# DB_NAME=paike2
+# DB_PASSWORD=123456
+# DB_NAME=paike
 
 # 启动服务
 python run.py
@@ -47,6 +48,7 @@ python -m app.main
 ```
 
 后端将在 http://localhost:8000 启动
+
 - API 文档: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
@@ -69,14 +71,17 @@ npm run dev
 ### 第一步：数据录入
 
 1. **教师管理** (`/teachers`)
+
    - 添加教师基本信息
    - 字段：教师编号、姓名、院系、性别、是否外聘
 
 2. **课程管理** (`/courses`)
+
    - 添加课程信息
    - 字段：课程编号、名称、学分、总学时
 
 3. **班级管理** (`/classes`)
+
    - 添加班级信息
    - 字段：班级编号、名称、年级、人数、专业
 
@@ -87,6 +92,7 @@ npm run dev
 ### 第二步：开课计划
 
 1. **创建开课计划** (`/offerings`)
+
    - 选择学期、课程、课程性质（必修/选修/通识）
    - 设置起止周、周次模式（连续/单周/双周）
    - 关联班级、教师、设施要求
@@ -100,7 +106,8 @@ npm run dev
 1. 进入**排课控制台** (`/scheduling`)
 
 2. 配置参数：
-   - **版本ID**：需要先在数据库创建排课版本
+
+   - **版本 ID**：需要先在数据库创建排课版本
    - **种群大小**：建议 100-200
    - **进化代数**：建议 200-300
    - 可使用预设参数（小/中/大规模）
@@ -118,14 +125,17 @@ npm run dev
 选择任一视角查询课表：
 
 1. **教师课表** (`/timetable/teacher`)
-   - 输入教师ID、学期、版本ID、周次
+
+   - 输入教师 ID、学期、版本 ID、周次
    - 查看该教师的周课表
 
 2. **班级课表** (`/timetable/class`)
-   - 输入班级ID查看学生课表
+
+   - 输入班级 ID 查看学生课表
 
 3. **教室课表** (`/timetable/classroom`)
-   - 输入教室ID查看教室使用情况
+
+   - 输入教室 ID 查看教室使用情况
 
 4. **周课表** (`/timetable/week`)
    - 查看某周的全部课程安排
@@ -176,6 +186,7 @@ GET /api/timetable/week?semester=2025-2026-1&version_id=1&week_number=1
 ### 约束类型
 
 **硬约束**（必须满足）：
+
 - 教师/班级/教室时间不冲突
 - 教室容量满足要求
 - 教室设施满足要求
@@ -183,6 +194,7 @@ GET /api/timetable/week?semester=2025-2026-1&version_id=1&week_number=1
 - 周四下午不排课
 
 **软约束**（尽量满足）：
+
 - 教师偏好时间
 - 必修课白天优先
 - 连堂课同教室
@@ -191,23 +203,25 @@ GET /api/timetable/week?semester=2025-2026-1&version_id=1&week_number=1
 
 ### 参数建议
 
-| 数据规模 | 种群大小 | 进化代数 | 预计时间 |
-|---------|---------|---------|---------|
-| 小（<50任务） | 50-100 | 100-150 | <1分钟 |
-| 中（50-200任务） | 100-150 | 200-250 | 1-3分钟 |
-| 大（>200任务） | 150-200 | 250-300 | 3-10分钟 |
+| 数据规模          | 种群大小 | 进化代数 | 预计时间  |
+| ----------------- | -------- | -------- | --------- |
+| 小（<50 任务）    | 50-100   | 100-150  | <1 分钟   |
+| 中（50-200 任务） | 100-150  | 200-250  | 1-3 分钟  |
+| 大（>200 任务）   | 150-200  | 250-300  | 3-10 分钟 |
 
 ## 常见问题
 
 ### 1. 排课失败
 
 **可能原因**：
+
 - 排课版本不存在或状态不是 draft
 - 没有教学任务数据
 - 教室/教师资源不足
 - 约束条件过于严格
 
 **解决方法**：
+
 - 检查数据库 `schedule_versions` 表
 - 确认 `teaching_tasks` 表有数据
 - 增加教室或放宽约束条件
@@ -215,11 +229,13 @@ GET /api/timetable/week?semester=2025-2026-1&version_id=1&week_number=1
 ### 2. 课表查询为空
 
 **可能原因**：
+
 - 排课未完成或失败
-- 查询参数错误（版本ID、学期等）
+- 查询参数错误（版本 ID、学期等）
 - 周次不在课程起止周范围内
 
 **解决方法**：
+
 - 确认排课已成功完成
 - 检查 `schedules` 表是否有数据
 - 核对查询参数
@@ -227,11 +243,13 @@ GET /api/timetable/week?semester=2025-2026-1&version_id=1&week_number=1
 ### 3. 前端无法连接后端
 
 **可能原因**：
+
 - 后端服务未启动
 - 端口冲突
 - CORS 配置问题
 
 **解决方法**：
+
 - 确认后端在 8000 端口运行
 - 检查 `backend/app/config.py` 中的 CORS 配置
 - 查看浏览器控制台网络请求
@@ -243,6 +261,7 @@ GET /api/timetable/week?semester=2025-2026-1&version_id=1&week_number=1
 可以添加 AI 助手功能，支持自然语言查询：
 
 1. 在后端添加专用 API：
+
 ```python
 @router.get("/ai/teacher_day_schedule")
 async def get_teacher_day_schedule(teacher_id: str, date: str):
@@ -251,6 +270,7 @@ async def get_teacher_day_schedule(teacher_id: str, date: str):
 ```
 
 2. 在 Dify 中创建工作流：
+
    - 解析用户意图
    - 调用 API 获取数据
    - 生成自然语言回答
@@ -302,9 +322,9 @@ srtp/
 ## 联系与支持
 
 如有问题，请查看：
+
 1. 后端 API 文档：http://localhost:8000/docs
 2. 项目 README 文件
 3. 代码注释
 
 祝使用愉快！
-

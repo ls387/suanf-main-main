@@ -24,8 +24,8 @@ cp .env.example .env
 ```
 DB_HOST=localhost
 DB_USER=root
-DB_PASSWORD=root
-DB_NAME=paike2
+DB_PASSWORD=123456
+DB_NAME=paike
 ```
 
 ### 3. 运行服务
@@ -41,6 +41,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 4. 访问 API 文档
 
 启动后访问：
+
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
@@ -49,6 +50,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 基础数据管理
 
 - **教师管理** `/api/teachers`
+
   - GET / - 获取所有教师
   - GET /{teacher_id} - 获取单个教师
   - POST / - 创建教师
@@ -56,9 +58,11 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
   - DELETE /{teacher_id} - 删除教师
 
 - **课程管理** `/api/courses`
+
   - 同上结构
 
 - **班级管理** `/api/classes`
+
   - 同上结构
 
 - **教室管理** `/api/classrooms`
@@ -67,6 +71,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 开课计划管理
 
 - **开课计划** `/api/offerings`
+
   - GET / - 获取开课计划列表（可按学期过滤）
   - GET /{offering_id} - 获取单个开课计划
   - POST / - 创建开课计划
@@ -74,6 +79,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
   - DELETE /{offering_id} - 删除开课计划
 
 - **教师黑名单时间** `/api/offerings/blackout-times/`
+
   - GET / - 获取禁止时间列表
   - POST / - 创建禁止时间
   - DELETE /{blackout_id} - 删除禁止时间
@@ -86,8 +92,9 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 排课调度
 
 - **运行排课** `POST /api/scheduling/run`
-  
+
   请求体示例：
+
   ```json
   {
     "version_id": 1,
@@ -104,12 +111,15 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ### 课表查询
 
 - **教师课表** `GET /api/timetable/teacher`
+
   - 参数: teacher_id, semester, version_id, week_number(可选)
 
 - **班级课表** `GET /api/timetable/class`
+
   - 参数: class_id, semester, version_id, week_number(可选)
 
 - **教室课表** `GET /api/timetable/classroom`
+
   - 参数: classroom_id, semester, version_id, week_number(可选)
 
 - **周课表** `GET /api/timetable/week`
@@ -170,8 +180,7 @@ def my_function(db: Database = Depends(get_db)):
 
 ## 注意事项
 
-1. 确保 MySQL 数据库已启动并创建了 `paike2` 数据库
+1. 确保 MySQL 数据库已启动并创建了 `paike` 数据库
 2. 确保已执行 `表3.txt` 中的建表 SQL
 3. 可以使用 `test_data_generator.py` 生成测试数据
 4. CORS 已配置，默认允许 localhost:5173 和 localhost:3000
-

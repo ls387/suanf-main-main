@@ -274,3 +274,5 @@ CREATE TABLE task_relation_constraints (
     FOREIGN KEY (offering_id) REFERENCES course_offerings(offering_id) ON DELETE CASCADE ON UPDATE CASCADE,
     UNIQUE KEY uk_offering_tasks_constraint (offering_id, task_sequence_a, task_sequence_b, constraint_type)
 );
+
+

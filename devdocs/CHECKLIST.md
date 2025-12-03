@@ -5,11 +5,13 @@
 ### 1. 环境检查
 
 - [ ] Python 3.9+ 已安装
+
   ```bash
   python --version
   ```
 
 - [ ] Node.js 16+ 已安装
+
   ```bash
   node --version
   npm --version
@@ -24,19 +26,22 @@
 
 ### 2. 数据库准备
 
-- [ ] 创建数据库 `paike2`
+- [ ] 创建数据库 `paike`
+
   ```sql
-  CREATE DATABASE paike2 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  CREATE DATABASE paike CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   ```
 
 - [ ] 导入表结构
+
   ```bash
-  mysql -u root -p paike2 < 表3.txt
+  mysql -u root -p paike < 表3.txt
   ```
 
 - [ ] 创建排课版本
+
   ```sql
-  USE paike2;
+  USE paike;
   INSERT INTO schedule_versions (version_id, semester, version_name, status, description, created_by)
   VALUES (1, '2025-2026-1', '测试版本1', 'draft', '第一个测试版本', 'admin');
   ```
@@ -49,24 +54,28 @@
 ### 3. 后端准备
 
 - [ ] 进入后端目录
+
   ```bash
   cd backend
   ```
 
 - [ ] 安装 Python 依赖
+
   ```bash
   pip install -r requirements.txt
   ```
 
 - [ ] 检查数据库配置
+
   - 文件位置：`backend/app/config.py`
   - 默认配置：
     - Host: localhost
     - User: root
     - Password: 123456
-    - Database: paike2
+    - Database: paike
 
 - [ ] 启动后端服务
+
   ```bash
   python run.py
   ```
@@ -79,22 +88,26 @@
 ### 4. 前端准备
 
 - [ ] 打开新终端，进入前端目录
+
   ```bash
   cd frontend
   ```
 
 - [ ] 安装 Node 依赖
+
   ```bash
   npm install
   ```
-  
+
   如果速度慢，可以使用国内镜像：
+
   ```bash
   npm config set registry https://registry.npmmirror.com
   npm install
   ```
 
 - [ ] 启动前端服务
+
   ```bash
   npm run dev
   ```
@@ -110,14 +123,17 @@
 ### 步骤 1: 录入基础数据
 
 - [ ] 添加至少 1 个教师
+
   - 路径：教师管理
   - 必填：教师编号、姓名、院系
 
 - [ ] 添加至少 1 门课程
+
   - 路径：课程管理
   - 必填：课程编号、名称、学分、学时
 
 - [ ] 添加至少 1 个班级
+
   - 路径：班级管理
   - 必填：班级编号、名称、年级、专业
 
@@ -140,7 +156,7 @@
 -- 为开课计划创建教学任务
 -- 例如：每周2次课，一次3节，一次2节
 INSERT INTO teaching_tasks (offering_id, group_id, task_sequence, slots_count)
-VALUES 
+VALUES
   (1, NULL, 1, 3),  -- 第1次课，3节
   (1, NULL, 2, 2);  -- 第2次课，2节
 ```
@@ -150,7 +166,7 @@ VALUES
 ### 步骤 4: 运行排课
 
 - [ ] 进入排课控制台
-- [ ] 设置版本ID = 1
+- [ ] 设置版本 ID = 1
 - [ ] 选择参数预设或自定义
 - [ ] 点击"开始排课"
 - [ ] 等待完成（可能需要几分钟）
@@ -195,7 +211,7 @@ VALUES
 ### 问题：课表查询为空
 
 - [ ] 检查排课是否成功完成
-- [ ] 检查版本ID、学期是否正确
+- [ ] 检查版本 ID、学期是否正确
 - [ ] 检查数据库 `schedules` 表是否有数据
 - [ ] 检查周次是否在课程起止周范围内
 
@@ -235,10 +251,10 @@ http://localhost:5173
 
 ```sql
 -- 检查数据库
-SHOW DATABASES LIKE 'paike2';
+SHOW DATABASES LIKE 'paike';
 
 -- 检查表
-USE paike2;
+USE paike;
 SHOW TABLES;
 
 -- 检查数据
@@ -269,4 +285,3 @@ SELECT COUNT(*) FROM teaching_tasks;
 ---
 
 **提示**：建议打印或保存此清单，每次启动系统时快速检查！
-
