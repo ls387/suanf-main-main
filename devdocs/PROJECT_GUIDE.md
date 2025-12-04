@@ -16,11 +16,11 @@
 
 ```bash
 # 创建数据库
-mysql -u root -p
+mysql -u pk -p
 CREATE DATABASE paike CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 # 导入表结构
-mysql -u root -p paike < 表3.txt
+mysql -u pk -p paike < 表3.txt
 
 # 生成测试数据（可选）
 python test_data_generator.py
@@ -36,7 +36,7 @@ pip install -r requirements.txt
 
 # 配置数据库（修改 .env 文件或使用默认配置）
 # DB_HOST=localhost
-# DB_USER=root
+# DB_USER=pk
 # DB_PASSWORD=123456
 # DB_NAME=paike
 

@@ -248,7 +248,7 @@ def analyze_schedule_conflicts(version_id):
     conn = pymysql.connect(
         host=os.getenv("DB_HOST") or "localhost",
         port=int(os.getenv("DB_PORT") or "3306"),
-        user=os.getenv("DB_USER") or "root",
+        user=os.getenv("DB_USER") or "pk",
         password=os.getenv("DB_PASSWORD") or "123456",
         database=os.getenv("DB_NAME") or "paike",
         charset="utf8mb4",
@@ -1473,6 +1473,12 @@ def optimize_utilization_and_preferences(
     print("-" * 80)
     optimize_preferences(version_id, results, task_classes, cursor, conn)
 
+    # 最后优化任务关系约束
+    print("\n" + "-" * 80)
+    print("优化任务关系约束")
+    print("-" * 80)
+    optimize_task_relations(version_id, results, task_classes, cursor, conn)
+
 
 def optimize_preferences(version_id, results, task_classes, cursor, conn):
     """第二阶段：在不违反硬约束的前提下，优化个性化要求（教师偏好时间）"""
@@ -1795,6 +1801,280 @@ def optimize_preferences(version_id, results, task_classes, cursor, conn):
             print("当前仍未满足的个性化要求详情：")
             print("=" * 80)
             show_remaining_preference_violations(version_id, cursor)
+
+
+def optimize_task_relations(version_id, results, task_classes, cursor, conn):
+    """优化任务关系约束违反情况"""
+    from collections import defaultdict
+
+    print("\n" + "-" * 80)
+    print("优化任务关系约束（课程多次上课的时间关系）")
+    print("-" * 80)
+
+    # 获取任务关系约束
+    query = """
+    SELECT 
+        trc.*,
+        tta.task_id AS task_id_a,
+        ttb.task_id AS task_id_b,
+        c.course_name
+    FROM task_relation_constraints trc
+    JOIN course_offerings co ON trc.offering_id = co.offering_id
+    JOIN courses c ON co.course_id = c.course_id
+    JOIN teaching_tasks tta ON co.offering_id = tta.offering_id 
+        AND tta.task_sequence = trc.task_sequence_a
+    JOIN teaching_tasks ttb ON co.offering_id = ttb.offering_id 
+        AND ttb.task_sequence = trc.task_sequence_b
+    WHERE co.offering_id IN (
+        SELECT DISTINCT tt.offering_id 
+        FROM teaching_tasks tt
+        JOIN schedules s ON tt.task_id = s.task_id
+        WHERE s.version_id = %s
+    )
+    """
+    cursor.execute(query, (version_id,))
+    constraints = cursor.fetchall()
+
+    if not constraints:
+        print("\n✓ 未设置任务关系约束")
+        return
+
+    # 加载offering_weeks数据
+    cursor.execute("SELECT offering_id, week_number FROM offering_weeks")
+    offering_weeks = {}
+    for row in cursor.fetchall():
+        offering_id = row["offering_id"]
+        week_number = row["week_number"]
+        if offering_id not in offering_weeks:
+            offering_weeks[offering_id] = set()
+        offering_weeks[offering_id].add(week_number)
+
+    def get_weeks(result):
+        """根据offering_id获取周次集合"""
+        offering_id = result["offering_id"]
+        if offering_id in offering_weeks:
+            return offering_weeks[offering_id]
+        start_week = result.get("start_week") or 1
+        end_week = result.get("end_week") or 17
+        week_pattern = result.get("week_pattern") or "CONTINUOUS"
+        if week_pattern == "CONTINUOUS":
+            return set(range(start_week, end_week + 1))
+        elif week_pattern == "SINGLE":
+            return set(w for w in range(start_week, end_week + 1) if w % 2 == 1)
+        elif week_pattern == "DOUBLE":
+            return set(w for w in range(start_week, end_week + 1) if w % 2 == 0)
+        else:
+            return set(range(start_week, end_week + 1))
+
+    # 构建当前占用情况
+    occupied_times = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    schedule_map = {}
+
+    for result in results:
+        schedule_id = result["schedule_id"]
+        schedule_map[schedule_id] = result
+        task_id = result["task_id"]
+        start_slot = result["start_slot"]
+        end_slot = start_slot + result["slots_count"] - 1
+        weekday = result["week_day"]
+        classroom_id = result["classroom_id"]
+        weeks = get_weeks(result)
+
+        for slot in range(start_slot, end_slot + 1):
+            time_key = (weekday, slot)
+            occupied_times["classroom"][classroom_id][time_key].append(weeks)
+            teacher_ids_str = result.get("teacher_ids", "")
+            if teacher_ids_str:
+                for teacher_id in teacher_ids_str.split(", "):
+                    if teacher_id:
+                        occupied_times["teacher"][teacher_id][time_key].append(weeks)
+            for cls in task_classes[task_id]:
+                occupied_times["class"][cls["class_id"]][time_key].append(weeks)
+
+    # 分析违反的约束
+    violations = []
+    day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+    for const in constraints:
+        cursor.execute(
+            "SELECT * FROM schedules WHERE version_id = %s AND task_id = %s",
+            (version_id, const["task_id_a"]),
+        )
+        sch_a = cursor.fetchone()
+        cursor.execute(
+            "SELECT * FROM schedules WHERE version_id = %s AND task_id = %s",
+            (version_id, const["task_id_b"]),
+        )
+        sch_b = cursor.fetchone()
+
+        if not sch_a or not sch_b:
+            continue
+
+        # 找到完整的result对象
+        result_a = schedule_map.get(sch_a["schedule_id"])
+        result_b = schedule_map.get(sch_b["schedule_id"])
+
+        if not result_a or not result_b:
+            continue
+
+        day_diff = abs(sch_a["week_day"] - sch_b["week_day"])
+        constraint_type = const["constraint_type"]
+        violated = False
+
+        if constraint_type == "REQUIRE_SAME_DAY":
+            if sch_a["week_day"] != sch_b["week_day"]:
+                violated = True
+        elif constraint_type == "AVOID_CONSECUTIVE_DAYS":
+            if day_diff == 1:
+                violated = True
+        elif constraint_type == "MIN_DAYS_APART":
+            min_gap = const["constraint_value"] or 1
+            if day_diff < min_gap:
+                violated = True
+
+        if violated:
+            violations.append(
+                {
+                    "constraint": const,
+                    "result_a": result_a,
+                    "result_b": result_b,
+                    "sch_a": sch_a,
+                    "sch_b": sch_b,
+                }
+            )
+
+    if not violations:
+        print("\n✓ 所有任务关系约束均已满足")
+        return
+
+    print(f"\n找到 {len(violations)} 处任务关系约束违反")
+
+    # 尝试优化
+    adjustments = []
+
+    for v in violations:
+        const = v["constraint"]
+        result_a = v["result_a"]
+        result_b = v["result_b"]
+        sch_a = v["sch_a"]
+        sch_b = v["sch_b"]
+
+        print(f"\n优化: {const['course_name']} - {const['constraint_type']}")
+        print(
+            f"  当前: 任务A={day_names[sch_a['week_day']]} 第{sch_a['start_slot']}节, "
+            f"任务B={day_names[sch_b['week_day']]} 第{sch_b['start_slot']}节"
+        )
+
+        # 根据约束类型寻找合适的时间
+        target_weekday = None
+        if const["constraint_type"] == "REQUIRE_SAME_DAY":
+            # 尝试将任务B调整到与任务A同一天
+            target_weekday = sch_a["week_day"]
+            print(f"  目标: 将任务B调整到 {day_names[target_weekday]}")
+
+        elif const["constraint_type"] == "AVOID_CONSECUTIVE_DAYS":
+            # 尝试将任务B调整到非连续天
+            current_day = sch_b["week_day"]
+            adjacent_days = {sch_a["week_day"] - 1, sch_a["week_day"] + 1}
+            for day in range(1, 6):  # 周一到周五
+                if day not in adjacent_days:
+                    target_weekday = day
+                    break
+            if target_weekday:
+                print(f"  目标: 将任务B调整到非连续天 {day_names[target_weekday]}")
+
+        elif const["constraint_type"] == "MIN_DAYS_APART":
+            # 尝试增加天数间隔
+            min_gap = const["constraint_value"] or 1
+            target_weekday = sch_a["week_day"] + min_gap
+            if target_weekday > 5:
+                target_weekday = sch_a["week_day"] - min_gap
+            if 1 <= target_weekday <= 5:
+                print(
+                    f"  目标: 将任务B调整到间隔≥{min_gap}天的 {day_names[target_weekday]}"
+                )
+
+        if not target_weekday or target_weekday < 1 or target_weekday > 5:
+            print("  ✗ 无法找到合适的目标时间")
+            continue
+
+        # 查找任务B在目标星期的可用时间槽
+        found_slot = False
+        task_b_id = sch_b["task_id"]
+        task_b_obj = next(
+            (t for r in results if r["task_id"] == task_b_id for t in [r]), None
+        )
+        if not task_b_obj:
+            continue
+
+        slots_count = task_b_obj["slots_count"]
+        classroom_id = sch_b["classroom_id"]
+        teacher_ids = result_b.get("teacher_ids", "").split(", ")
+        teacher_ids = [tid for tid in teacher_ids if tid]
+        class_ids = [cls["class_id"] for cls in task_classes[task_b_id]]
+        weeks_b = get_weeks(result_b)
+
+        for start_slot in range(1, 14 - slots_count + 1):
+            if check_time_available(
+                target_weekday,
+                start_slot,
+                slots_count,
+                classroom_id,
+                teacher_ids,
+                class_ids,
+                occupied_times,
+                weeks_b,
+            ):
+                adjustments.append(
+                    {
+                        "schedule_id": sch_b["schedule_id"],
+                        "task_id": task_b_id,
+                        "old_weekday": sch_b["week_day"],
+                        "old_start": sch_b["start_slot"],
+                        "new_weekday": target_weekday,
+                        "new_start": start_slot,
+                        "course": const["course_name"],
+                        "reason": f"满足任务关系约束: {const['constraint_type']}",
+                    }
+                )
+                print(
+                    f"  ✓ 找到可用时间: {day_names[target_weekday]} 第{start_slot}-{start_slot+slots_count-1}节"
+                )
+                found_slot = True
+                break
+
+        if not found_slot:
+            print("  ✗ 未找到可用时间槽（所有时间都有冲突）")
+
+    if adjustments:
+        print(f"\n找到 {len(adjustments)} 个可优化的任务关系约束")
+        print("\n调整详情:")
+        for i, adj in enumerate(adjustments, 1):
+            print(f"  [{i}] {adj['course']}")
+            print(f"      {adj['reason']}")
+            print(
+                f"      {day_names[adj['old_weekday']]} 第{adj['old_start']}节 → "
+                f"{day_names[adj['new_weekday']]} 第{adj['new_start']}节"
+            )
+
+        choice = input("\n是否应用这些调整? (y/n): ").strip().lower()
+        if choice == "y":
+            for adj in adjustments:
+                cursor.execute(
+                    """
+                    UPDATE schedules 
+                    SET week_day = %s, start_slot = %s 
+                    WHERE schedule_id = %s
+                    """,
+                    (adj["new_weekday"], adj["new_start"], adj["schedule_id"]),
+                )
+            conn.commit()
+            print(f"\n✅ 已成功优化 {len(adjustments)} 处任务关系约束违反")
+            print("建议重新运行冲突分析验证结果")
+        else:
+            print("\n已取消优化")
+    else:
+        print("\n未找到可以优化的方案（所有调整都会违反硬约束）")
 
 
 def find_alternative_time_for_preference(

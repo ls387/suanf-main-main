@@ -54,7 +54,7 @@ class SchedulingGeneticAlgorithm:
         - classroom_continuity: 连续课程未在同一教室
         - utilization_waste: 教室容量浪费（教室太大、学生太少）
         - student_overload: 单个班级某天课时数过多
-        - task_relation: 任务关系约束（当前未实际启用，仅预留）
+        - task_relation: 任务关系约束（同一课程不同任务次的时间关系）
         - required_night_penalty: 必修/通识课安排在晚上 11-13 节
         - required_weekend_penalty: 必修/通识课安排在周末下午（叠加在 weekend_penalty 之上）
         - elective_prime_time_penalty: 选修课占用“黄金时段”（上午和下午前半段）
@@ -108,8 +108,11 @@ class SchedulingGeneticAlgorithm:
         # 构建教师偏好映射
         self.teacher_preferences = self._build_teacher_preferences()
 
+        # 构建任务关系约束映射
+        self.task_relations = self._build_task_relations()
+
         logger.info(
-            f"预处理完成：{len(self.tasks)}个任务，{len(self.classrooms)}个教室"
+            f"预处理完成：{len(self.tasks)}个任务，{len(self.classrooms)}个教室，{len(self.task_relations)}个任务关系约束"
         )
 
     def _sort_tasks_by_priority(self) -> List[TeachingTask]:
@@ -176,6 +179,31 @@ class SchedulingGeneticAlgorithm:
                     )
 
         return dict(preferences)
+
+    def _build_task_relations(self) -> Dict[int, List[Dict]]:
+        """构建任务关系约束映射
+
+        Returns:
+            Dict[task_id, List[{related_task_id, relation_type, min_gap_days, penalty}]]
+        """
+        relations = defaultdict(list)
+
+        for rel in self.data["task_relations"]:
+            # 从 task_id_from -> task_id_to 的关系
+            relations[rel.task_id_from].append(
+                {
+                    "related_task_id": rel.task_id_to,
+                    "relation_type": rel.relation_type,
+                    "min_gap_days": rel.min_gap_days,
+                    "same_day": rel.same_day,
+                    "penalty": rel.penalty
+                    or self.config["penalty_scores"]["task_relation"],
+                    "notes": rel.notes,
+                }
+            )
+
+        logger.info(f"构建了 {len(relations)} 个任务的关系约束")
+        return dict(relations)
 
     def _build_lookup_tables(self):
         """构建查找表提高性能"""
@@ -817,6 +845,9 @@ class SchedulingGeneticAlgorithm:
         # 课程时段偏好（新增）
         penalty += self._check_course_time_preference(individual)
 
+        # 任务关系约束
+        penalty += self._check_task_relations(individual)
+
         return penalty
 
     def _check_teacher_preferences(self, individual: List[Gene]) -> float:
@@ -856,6 +887,70 @@ class SchedulingGeneticAlgorithm:
 
             if not in_preferred and teacher_prefs.get("preferred"):
                 penalty += self.config["penalty_scores"]["teacher_preference"]
+
+        return penalty
+
+    def _check_task_relations(self, individual: List[Gene]) -> float:
+        """检查任务关系约束（软约束）
+
+        支持三种约束类型：
+        1. same_day: 要求两个任务必须在同一天
+        2. different_day: 避免两个任务在连续的两天
+        3. time_gap: 要求两个任务至少间隔N天
+        """
+        penalty = 0
+
+        # 构建任务ID到基因的映射
+        task_gene_map = {gene.task_id: gene for gene in individual}
+
+        # 检查每个有关系约束的任务
+        for task_id, relations in self.task_relations.items():
+            if task_id not in task_gene_map:
+                continue
+
+            gene_from = task_gene_map[task_id]
+
+            for rel in relations:
+                related_task_id = rel["related_task_id"]
+                if related_task_id not in task_gene_map:
+                    continue
+
+                gene_to = task_gene_map[related_task_id]
+                relation_type = rel["relation_type"]
+                constraint_penalty = rel.get(
+                    "penalty", self.config["penalty_scores"]["task_relation"]
+                )
+
+                # 计算两个任务的天数差
+                day_diff = abs(gene_from.week_day - gene_to.week_day)
+
+                if relation_type == "same_day":
+                    # 要求同一天
+                    if gene_from.week_day != gene_to.week_day:
+                        penalty += constraint_penalty
+                        logger.debug(
+                            f"任务关系约束违反: 任务{task_id}和{related_task_id}应在同一天，"
+                            f"但实际分别在周{gene_from.week_day}和周{gene_to.week_day}"
+                        )
+
+                elif relation_type == "different_day":
+                    # 避免连续两天
+                    if day_diff == 1:
+                        penalty += constraint_penalty
+                        logger.debug(
+                            f"任务关系约束违反: 任务{task_id}和{related_task_id}在连续两天，"
+                            f"周{gene_from.week_day}和周{gene_to.week_day}"
+                        )
+
+                elif relation_type == "time_gap":
+                    # 至少间隔N天
+                    min_gap = rel.get("min_gap_days", 1) or 1
+                    if day_diff < min_gap:
+                        penalty += constraint_penalty
+                        logger.debug(
+                            f"任务关系约束违反: 任务{task_id}和{related_task_id}应至少间隔{min_gap}天，"
+                            f"但实际只间隔{day_diff}天"
+                        )
 
         return penalty
 

@@ -52,7 +52,7 @@ app.include_router(timetables.router, prefix="/api/timetable", tags=["课表查�
 
 
 @app.get("/")
-async def root():
+async def pk():
     """根路径"""
     return {
         "message": "智能排课系统 API",
@@ -69,11 +69,10 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(
         "app.main:app",
         host=settings.API_HOST,
         port=settings.API_PORT,
         reload=settings.API_RELOAD,
     )
-

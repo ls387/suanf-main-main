@@ -43,7 +43,7 @@ class SchedulingSystem:
         # 从环境变量获取数据库配置
         db_config = {
             "host": os.getenv("DB_HOST", "localhost"),
-            "user": os.getenv("DB_USER", "root"),
+            "user": os.getenv("DB_USER", "pk"),
             "password": os.getenv("DB_PASSWORD", "123456"),
             "database": os.getenv("DB_NAME", "paike"),
             "charset": "utf8mb4",

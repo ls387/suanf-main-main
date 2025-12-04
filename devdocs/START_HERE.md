@@ -34,14 +34,14 @@
 
 ```bash
 # 1. 创建数据库
-mysql -u root -p
+mysql -u pk -p
 CREATE DATABASE paike CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE paike;
 
 # 2. 导入表结构
 source 表3.txt;
 # 或者
-mysql -u root -p paike < 表3.txt
+mysql -u pk -p paike < 表3.txt
 
 # 3. 创建排课版本（必需！）
 INSERT INTO schedule_versions (version_id, semester, version_name, status, description, created_by)

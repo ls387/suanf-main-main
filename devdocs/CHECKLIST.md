@@ -35,7 +35,7 @@
 - [ ] 导入表结构
 
   ```bash
-  mysql -u root -p paike < 表3.txt
+  mysql -u pk -p paike < 表3.txt
   ```
 
 - [ ] 创建排课版本
@@ -70,7 +70,7 @@
   - 文件位置：`backend/app/config.py`
   - 默认配置：
     - Host: localhost
-    - User: root
+    - User: pk
     - Password: 123456
     - Database: paike
 

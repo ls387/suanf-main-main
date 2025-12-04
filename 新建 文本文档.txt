@@ -351,7 +351,7 @@ VALUES ('2025-2026-1','2025秋第一轮草案','draft','自动算法初始版本
 步骤 3：配置环境变量（PowerShell 示例）
 $env:DB_HOST="localhost"
 $env:DB_PORT="3306"
-$env:DB_USER="root"
+$env:DB_USER="pk"
 $env:DB_PASSWORD="123456"
 $env:DB_NAME="paike"
 

@@ -13,7 +13,7 @@ def connect_db():
     """连接数据库"""
     return pymysql.connect(
         host="localhost",
-        user="root",
+        user="pk",
         password="123456",
         database="paike",
         charset="utf8mb4",

@@ -447,17 +447,20 @@ class DataLoader:
         try:
             query = """
             SELECT 
-                tta.task_id, 
-                ttb.task_id AS related_task_id,
+                trc.constraint_id AS relation_id,
+                trc.offering_id,
+                tta.task_id AS task_id_from,
+                ttb.task_id AS task_id_to,
                 CASE trc.constraint_type
                     WHEN 'REQUIRE_SAME_DAY' THEN 'same_day'
                     WHEN 'AVOID_CONSECUTIVE_DAYS' THEN 'different_day'
                     WHEN 'MIN_DAYS_APART' THEN 'time_gap'
                     ELSE 'other'
                 END AS relation_type,
-                trc.constraint_value AS time_gap,
+                trc.constraint_value AS min_gap_days,
                 CASE WHEN trc.constraint_type = 'REQUIRE_SAME_DAY' THEN 1 ELSE 0 END AS same_day,
-                trc.constraint_type AS description
+                trc.penalty_score AS penalty,
+                trc.constraint_type AS notes
             FROM task_relation_constraints trc
             JOIN course_offerings co ON trc.offering_id = co.offering_id
             JOIN teaching_tasks tta ON co.offering_id = tta.offering_id AND tta.task_sequence = trc.task_sequence_a
@@ -465,7 +468,9 @@ class DataLoader:
             WHERE co.semester = %s
             """
             rows = self.db.execute_query(query, (semester,))
-            return [TaskRelation(**row) for row in rows]
+            relations = [TaskRelation(**row) for row in rows]
+            logger.info(f"加载了 {len(relations)} 条任务关系约束")
+            return relations
         except Exception as e:
             # 如果表不存在或其他错误，返回空列表
             logger.warning(f"无法加载任务关系约束: {e}")

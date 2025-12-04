@@ -14,7 +14,7 @@ def check_data_scale():
     # 获取数据库配置，处理空字符串的情况
     db_host = os.getenv("DB_HOST") or "localhost"
     db_port = os.getenv("DB_PORT") or "3306"
-    db_user = os.getenv("DB_USER") or "root"
+    db_user = os.getenv("DB_USER") or "pk"
     db_password = os.getenv("DB_PASSWORD") or "123456"
     db_name = os.getenv("DB_NAME") or "paike"
 

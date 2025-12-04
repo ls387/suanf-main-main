@@ -119,7 +119,7 @@ pip install pymysql openpyxl
 ```powershell
 # 设置数据库连接(环境变量)
 $env:DB_HOST = "localhost"
-$env:DB_USER = "root"
+$env:DB_USER = "pk"
 $env:DB_PASSWORD = "123456"
 $env:DB_NAME = "paike"
 ```
