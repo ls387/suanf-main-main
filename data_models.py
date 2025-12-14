@@ -218,13 +218,6 @@ class Gene:
     week_day: int  # 1-7
     start_slot: int  # 1-13
 
-    @property
-    def end_slot(self) -> int:
-        """根据任务的slots_count计算结束节次"""
-        # 这里需要在实际使用时获取task信息
-        # 暂时返回start_slot，实际使用时需要完善
-        return self.start_slot
-
 
 @dataclass
 class Schedule:

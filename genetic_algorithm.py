@@ -408,11 +408,43 @@ class SchedulingGeneticAlgorithm:
     def _get_preferred_time_slots(
         self, task: TeachingTask, valid_slots: List[tuple]
     ) -> List[tuple]:
-        """根据课程性质获取偏好的时间段"""
+        """根据课程性质和节数获取偏好的时间段
+
+        优化策略：
+        1. 2节课优先使用专属时间块 [(1,2), (9,10)]，避免占用3节块的前半段
+        2. 必修课和通识课优先安排在白天
+        3. 选修课可以安排在任何时间
+        """
         offering = task.offering
         if not offering:
             return valid_slots
 
+        # ========== 新增逻辑：2节课优先使用专属时间块 ==========
+        if task.slots_count == 2:
+            # 定义2节课的专属时间块（不会影响3节课）
+            dedicated_slots = [(1, 2), (9, 10)]
+
+            # 从3节块拆分出的共享时间块（会影响3节课的完整性）
+            shared_slots = [(3, 4), (6, 7), (11, 12)]
+
+            # 根据课程性质决定优先级策略
+            if offering.course_nature in [CourseNature.REQUIRED, CourseNature.GENERAL]:
+                # 必修课和通识课：优先使用白天的专属块
+                daytime_dedicated = [(1, 2)]  # 上午的专属块
+                daytime_shared = [(3, 4), (6, 7)]  # 白天的共享块
+
+                # 按优先级排序：白天专属 > 白天共享 > 晚上专属
+                preferred = daytime_dedicated + daytime_shared + [(9, 10)]
+                return preferred
+            else:
+                # 选修课：优先使用专属块（不区分白天晚上），避免占用3节块
+                # 85% 概率优先使用专属块，15% 使用共享块（保持一定灵活性）
+                if random.random() < 0.85:
+                    return dedicated_slots
+                else:
+                    return valid_slots
+
+        # ========== 原有逻辑：其他节数的课程 ==========
         # 白天时间块（不包括晚上11-13节）
         daytime_slots = [slot for slot in valid_slots if slot[0] <= 10]
 
@@ -720,7 +752,7 @@ class SchedulingGeneticAlgorithm:
             individual, teacher_schedule, class_schedule, classroom_schedule
         )
 
-        # 如果硬约束被违反，直接返回低分
+        # 如果硬约束分数低于阈值，直接返回
         if score < -50000:
             return score
 
@@ -896,7 +928,7 @@ class SchedulingGeneticAlgorithm:
         支持三种约束类型：
         1. same_day: 要求两个任务必须在同一天
         2. different_day: 避免两个任务在连续的两天
-        3. time_gap: 要求两个任务至少间隔N天
+        3. time_gap: 任务之间至少间隔N天
         """
         penalty = 0
 
