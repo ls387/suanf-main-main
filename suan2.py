@@ -40,16 +40,12 @@ class SchedulingSystem:
 
     def setup_database_connection(self):
         """设置数据库连接"""
-        # 从环境变量获取数据库配置
-        db_config = {
-            "host": os.getenv("DB_HOST", "localhost"),
-            "user": os.getenv("DB_USER", "pk"),
-            "password": os.getenv("DB_PASSWORD", "123456"),
-            "database": os.getenv("DB_NAME", "paike"),
-            "charset": "utf8mb4",
-        }
+        from db_config import get_db_config
 
-        logger.info(f"连接数据库: {db_config['host']}:{db_config['database']}")
+        db_config = get_db_config()
+        logger.info(
+            f"连接数据库: {db_config['host']}:{db_config['port']}/{db_config['database']}"
+        )
 
         self.db_connector = DatabaseConnector(**db_config)
         self.db_connector.connect()

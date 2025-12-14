@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     # 数据库配置
     DB_HOST: str = "localhost"
+    DB_PORT: int = 3306
     DB_USER: str = "pk"
     # 你的 MySQL 密码，当前统一改为 pk，如需修改请同步改动其它脚本
     DB_PASSWORD: str = "123456"

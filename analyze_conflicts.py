@@ -244,15 +244,11 @@ def export_conflicts_to_excel(
 def analyze_schedule_conflicts(version_id):
     """分析指定版本的排课冲突"""
 
-    # 连接数据库
-    conn = pymysql.connect(
-        host=os.getenv("DB_HOST") or "localhost",
-        port=int(os.getenv("DB_PORT") or "3306"),
-        user=os.getenv("DB_USER") or "pk",
-        password=os.getenv("DB_PASSWORD") or "123456",
-        database=os.getenv("DB_NAME") or "paike",
-        charset="utf8mb4",
-    )
+    # 使用统一的配置管理
+    from db_config import get_db_config
+
+    db_config = get_db_config()
+    conn = pymysql.connect(**db_config)
 
     try:
         cursor = conn.cursor(pymysql.cursors.DictCursor)
@@ -1798,7 +1794,7 @@ def optimize_preferences(version_id, results, task_classes, cursor, conn):
         # 即使无法优化，也显示当前未满足的个性化要求
         if total_violations > 0:
             print("\n" + "=" * 80)
-            print("当前仍未满足的个性化要求详情：")
+            print("当前仍未满足的个性化要求详情")
             print("=" * 80)
             show_remaining_preference_violations(version_id, cursor)
 
@@ -2708,15 +2704,3 @@ def regenerate_conflict_report_after_optimization(version_id, cursor):
         print(f"\n✓ 优化后冲突报告已导出到: {filename}")
     else:
         print("\n✓ 无需导出报告（所有容量冲突已解决）")
-
-
-if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) < 2:
-        print("用法: python analyze_conflicts.py <version_id>")
-        print("示例: python analyze_conflicts.py 1")
-        sys.exit(1)
-
-    version_id = int(sys.argv[1])
-    analyze_schedule_conflicts(version_id)

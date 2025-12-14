@@ -67,14 +67,10 @@ def format_weeks(weeks_str, start_week=None, end_week=None, week_pattern=None):
 def view_schedule(version_id):
     """查看排课结果"""
 
-    conn = pymysql.connect(
-        host=os.getenv("DB_HOST") or "localhost",
-        port=int(os.getenv("DB_PORT") or "3306"),
-        user=os.getenv("DB_USER") or "pk",
-        password=os.getenv("DB_PASSWORD") or "123456",
-        database=os.getenv("DB_NAME") or "paike",
-        charset="utf8mb4",
-    )
+    from db_config import get_db_config
+
+    db_config = get_db_config()
+    conn = pymysql.connect(**db_config)
 
     try:
         cursor = conn.cursor(pymysql.cursors.DictCursor)

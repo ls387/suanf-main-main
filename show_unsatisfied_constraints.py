@@ -21,15 +21,12 @@ if sys.platform == "win32":
 
 def get_db_connection():
     """获取数据库连接"""
-    return pymysql.connect(
-        host=os.getenv("DB_HOST") or "localhost",
-        port=int(os.getenv("DB_PORT") or "3306"),
-        user=os.getenv("DB_USER") or "pk",
-        password=os.getenv("DB_PASSWORD") or "123456",
-        database=os.getenv("DB_NAME") or "paike",
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    from db_config import get_db_config
+
+    db_config = get_db_config()
+    db_config["cursorclass"] = pymysql.cursors.DictCursor
+
+    return pymysql.connect(**db_config)
 
 
 def analyze_unsatisfied_constraints(version_id):

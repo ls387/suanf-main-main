@@ -21,10 +21,12 @@ class DatabaseConnector:
         user: str,
         password: str,
         database: str,
+        port: int = 3306,
         charset: str = "utf8mb4",
     ):
         self.connection_config = {
             "host": host,
+            "port": port,
             "user": user,
             "password": password,
             "database": database,

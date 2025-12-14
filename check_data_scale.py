@@ -11,20 +11,10 @@ def check_data_scale():
     """检查数据规模"""
     print("正在连接数据库...")
 
-    # 获取数据库配置，处理空字符串的情况
-    db_host = os.getenv("DB_HOST") or "localhost"
-    db_port = os.getenv("DB_PORT") or "3306"
-    db_user = os.getenv("DB_USER") or "pk"
-    db_password = os.getenv("DB_PASSWORD") or "123456"
-    db_name = os.getenv("DB_NAME") or "paike"
+    # 使用统一的配置管理
+    from db_config import get_db_config
 
-    db_config = {
-        "host": db_host,
-        "port": int(db_port),
-        "user": db_user,
-        "password": db_password,
-        "database": db_name,
-    }
+    db_config = get_db_config()
 
     try:
         conn = pymysql.connect(**db_config)

@@ -16,12 +16,13 @@ async def run_scheduling(request: SchedulingRequest):
     # 构建数据库配置
     db_config = {
         "host": settings.DB_HOST,
+        "port": settings.DB_PORT,
         "user": settings.DB_USER,
         "password": settings.DB_PASSWORD,
         "database": settings.DB_NAME,
         "charset": settings.DB_CHARSET,
     }
-    
+
     # 构建遗传算法配置
     ga_config = {
         "population_size": request.population,
@@ -32,10 +33,9 @@ async def run_scheduling(request: SchedulingRequest):
         "elitism_size": request.elitism_size,
         "max_stagnation": request.max_stagnation,
     }
-    
+
     # 创建排课服务并运行
     service = SchedulingService(db_config)
     result = service.run_scheduling(request.version_id, ga_config)
-    
-    return SchedulingResponse(**result)
 
+    return SchedulingResponse(**result)
