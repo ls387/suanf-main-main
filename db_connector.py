@@ -283,9 +283,9 @@ class DataLoader:
             Set[int]: 周次集合
         """
         if not start_week or not end_week:
-            # 如果没有指定，默认1-18周
+            # 如果没有指定，默认1-17周（学校最多17周）
             start_week = 1
-            end_week = 18
+            end_week = 17
 
         if not week_pattern or week_pattern == "CONTINUOUS":
             # 全学期/连续周
@@ -460,9 +460,7 @@ class DataLoader:
                     ELSE 'other'
                 END AS relation_type,
                 trc.constraint_value AS min_gap_days,
-                CASE WHEN trc.constraint_type = 'REQUIRE_SAME_DAY' THEN 1 ELSE 0 END AS same_day,
-                trc.penalty_score AS penalty,
-                trc.constraint_type AS notes
+                trc.penalty_score AS penalty
             FROM task_relation_constraints trc
             JOIN course_offerings co ON trc.offering_id = co.offering_id
             JOIN teaching_tasks tta ON co.offering_id = tta.offering_id AND tta.task_sequence = trc.task_sequence_a

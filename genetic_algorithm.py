@@ -46,7 +46,7 @@ class SchedulingGeneticAlgorithm:
         - capacity_violation: 教室容量不足
         - blackout_violation: 教师黑名单时间上课
         - feature_violation: 教室不满足课程必须的设施
-        - thursday_afternoon: 周四下午（第6节及以后）禁止排课
+        - thursday_afternoon: 周四下午（第6-10节）禁止排课，晚上（第11-13节）允许
         - campus_commute: 同一教师一天跨多个校区上课
 
         软约束（违反会按权重扣分，用来“引导”更优方案）：
@@ -195,10 +195,8 @@ class SchedulingGeneticAlgorithm:
                     "related_task_id": rel.task_id_to,
                     "relation_type": rel.relation_type,
                     "min_gap_days": rel.min_gap_days,
-                    "same_day": rel.same_day,
                     "penalty": rel.penalty
                     or self.config["penalty_scores"]["task_relation"],
-                    "notes": rel.notes,
                 }
             )
 
@@ -287,8 +285,8 @@ class SchedulingGeneticAlgorithm:
             weekday = random.choice(preferred_weekdays)
             start_slot, _ = random.choice(preferred_time_slots)
 
-            # 检查周四下午限制
-            if weekday == 4 and start_slot >= 6:  # 周四下午
+            # 检查周四下午限制（第6-10节不可排课，第11-13节晚上可以）
+            if weekday == 4 and 6 <= start_slot <= 10:
                 continue
 
             # 检查教师黑名单时间
@@ -341,8 +339,8 @@ class SchedulingGeneticAlgorithm:
             weekday = random.randint(1, 5)  # 只选周一到周五
             start_slot, _ = random.choice(valid_slots)
 
-            # 检查周四下午限制
-            if weekday == 4 and start_slot >= 6:  # 周四下午
+            # 检查周四下午限制（第6-10节不可排课，第11-13节晚上可以）
+            if weekday == 4 and 6 <= start_slot <= 10:
                 continue
 
             # 检查教师黑名单时间
@@ -386,10 +384,15 @@ class SchedulingGeneticAlgorithm:
                 )
 
         # 如果无法找到可行安排，返回一个随机安排（会在适应度函数中被惩罚）
+        # 但仍然需要遵守周四下午禁排等硬性规则
         teacher_id = random.choice(task.teachers)
-        weekday = random.choice(preferred_weekdays)
-        start_slot, _ = random.choice(preferred_time_slots)
         classroom = random.choice(self.classrooms)
+        for _ in range(50):
+            weekday = random.choice(preferred_weekdays)
+            start_slot, _ = random.choice(preferred_time_slots)
+            # 确保不违反周四下午禁排规则
+            if not (weekday == 4 and 6 <= start_slot <= 10):
+                break
 
         return Gene(
             task.task_id, teacher_id, classroom.classroom_id, weekday, start_slot
@@ -813,8 +816,8 @@ class SchedulingGeneticAlgorithm:
             ):
                 penalty += self.config["penalty_scores"]["blackout_violation"]
 
-            # 检查周四下午限制
-            if gene.week_day == 4 and gene.start_slot >= 6:
+            # 检查周四下午限制（第6-10节不可排课，第11-13节晚上可以）
+            if gene.week_day == 4 and 6 <= gene.start_slot <= 10:
                 penalty += self.config["penalty_scores"]["thursday_afternoon"]
 
         # 检查校区通勤（现在视为硬约束）：同一教师同一天涉及多个校区
@@ -1256,10 +1259,10 @@ class SchedulingGeneticAlgorithm:
                     new_weekday = random.randint(1, 5)  # 只选工作日
                     new_start_slot, _ = random.choice(valid_slots)
 
-                    # 避开周四下午
-                    if new_weekday == 4 and new_start_slot >= 6:
+                    # 避开周四下午（第6-10节不可排课，第11-13节晚上可以）
+                    if new_weekday == 4 and 6 <= new_start_slot <= 10:
                         new_start_slot = random.choice(
-                            [s for s, _ in valid_slots if s < 6]
+                            [s for s, _ in valid_slots if s < 6 or s > 10]
                         )
 
                     mutated[i] = Gene(
@@ -1355,8 +1358,8 @@ class SchedulingGeneticAlgorithm:
             new_weekday = random.randint(1, 5)  # 工作日
             new_start_slot, _ = random.choice(valid_slots)
 
-            # 避开周四下午
-            if new_weekday == 4 and new_start_slot >= 6:
+            # 避开周四下午（第6-10节不可排课，第11-13节晚上可以）
+            if new_weekday == 4 and 6 <= new_start_slot <= 10:
                 attempts += 1
                 continue
 
@@ -1427,18 +1430,34 @@ class SchedulingGeneticAlgorithm:
         best_fitness = float("-inf")
         stagnation_count = 0
 
+        # 获取进度回调函数（如果有）
+        progress_callback = self.config.get("progress_callback", None)
+
         for generation in range(self.config["generations"]):
             # 计算适应度
             fitness_scores = [self.fitness(individual) for individual in population]
 
             # 记录最佳适应度
             current_best = max(fitness_scores)
+            avg_fitness = (
+                sum(fitness_scores) / len(fitness_scores) if fitness_scores else 0
+            )
+
             if current_best > best_fitness:
                 best_fitness = current_best
                 stagnation_count = 0
                 logger.info(f"第 {generation} 代，新的最佳适应度: {best_fitness:.2f}")
             else:
                 stagnation_count += 1
+
+            # 调用进度回调（如果有）
+            if progress_callback:
+                try:
+                    progress_callback(
+                        generation, best_fitness, avg_fitness, stagnation_count
+                    )
+                except Exception as e:
+                    logger.warning(f"进度回调执行失败: {e}")
 
             # 检查停滞
             if stagnation_count >= self.config["max_stagnation"]:

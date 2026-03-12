@@ -34,6 +34,24 @@ logger = logging.getLogger(__name__)
 class SchedulingSystem:
     """排课系统主类"""
 
+    # === 配置常量 ===
+    # 容量浪费阈值配置
+    WASTE_RATIO_SMALL_CLASS = 0.5  # 小班(<30人)允许50%浪费
+    WASTE_RATIO_MID_CLASS = 0.4  # 中班(30-60人)允许40%
+    WASTE_RATIO_LARGE_CLASS = 0.3  # 大班(>60人)允许30%
+
+    SMALL_CLASS_THRESHOLD = 30  # 小班阈值
+    MID_CLASS_THRESHOLD = 60  # 中班阈值
+
+    # 显示配置
+    MAX_DISPLAY_CONFLICTS = 5  # 冲突详情最多显示数量
+    MAX_DISPLAY_VIOLATIONS = 5  # 容量违规最多显示数量
+    MAX_DISPLAY_WASTE = 10  # 容量浪费最多显示数量
+    MAX_DISPLAY_PREFERENCES = 10  # 偏好未满足最多显示数量
+
+    # 利用率阈值
+    LOW_UTILIZATION_THRESHOLD = 0.5  # 利用率过低阈值
+
     def __init__(self):
         self.db_connector = None
         self.data_loader = None
@@ -146,8 +164,28 @@ class SchedulingSystem:
             if not self.validate_data_integrity(data):
                 return False
 
-            # 初始化遗传算法
+            # 初始化遗传算法（添加进度回调）
             logger.info("初始化遗传算法")
+
+            # 定义进度回调函数
+            def progress_callback(generation, best_fitness, avg_fitness, stagnation):
+                """进度回调：每10代输出一次"""
+                if (
+                    generation % 10 == 0
+                    or generation == ga_config.get("generations", 200) - 1
+                ):
+                    logger.info(
+                        f"[进化进度] 第 {generation}/{ga_config.get('generations', 200)} 代 | "
+                        f"最佳适应度: {best_fitness:.2f} | "
+                        f"平均适应度: {avg_fitness:.2f} | "
+                        f"停滞代数: {stagnation}"
+                    )
+
+            # 将回调函数添加到配置
+            if ga_config is None:
+                ga_config = {}
+            ga_config["progress_callback"] = progress_callback
+
             ga = SchedulingGeneticAlgorithm(data, ga_config)
 
             # 运行算法
@@ -199,7 +237,7 @@ class SchedulingSystem:
             conflicts["teacher_count"]
             + conflicts["class_count"]
             + conflicts["classroom_count"]
-            + len(capacity_violations)  # 容量不足也是硬冲突
+            + len(capacity_violations)
         )
 
         if total_conflicts == 0:
@@ -223,15 +261,19 @@ class SchedulingSystem:
 
             if len(capacity_violations) > 0:
                 logger.warning(f"  - 容量不足冲突: {len(capacity_violations)} 处")
-                for i, item in enumerate(capacity_violations[:5], 1):
+                for i, item in enumerate(
+                    capacity_violations[: self.MAX_DISPLAY_VIOLATIONS], 1
+                ):
                     logger.warning(
                         f"    [{i}] {item['course']}: 教室 {item['classroom']} "
                         f"(容量{item['capacity']}) < 学生数{item['students']}, "
                         f"缺少 {item['shortage']} 个座位"
                     )
-                if len(capacity_violations) > 5:
+                if len(capacity_violations) > self.MAX_DISPLAY_VIOLATIONS:
                     logger.warning(
-                        f"    ... 还有 {len(capacity_violations) - 5} 个容量不足问题"
+                        f"    ... 还有 "
+                        f"{len(capacity_violations) - self.MAX_DISPLAY_VIOLATIONS} "
+                        f"个容量不足问题"
                     )
 
         # 教室利用率统计
@@ -246,53 +288,40 @@ class SchedulingSystem:
         """打印冲突详细信息"""
         day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
-        for i, conflict in enumerate(conflict_details[:5], 1):  # 只显示前5个冲突
+        for i, conflict in enumerate(conflict_details[: self.MAX_DISPLAY_CONFLICTS], 1):
             entity_id = conflict["entity_id"]
             weekday = conflict["weekday"]
             slot = conflict["slot"]
 
-            # 获取实体名称
-            if entity_type == "教师":
-                entity_name = data["teachers"].get(entity_id, None)
-                entity_name_str = entity_name.teacher_name if entity_name else entity_id
-            elif entity_type == "班级":
-                entity_name = data["classes"].get(entity_id, None)
-                entity_name_str = entity_name.class_name if entity_name else entity_id
-            else:  # 教室
-                entity_name = data["classrooms"].get(entity_id, None)
-                entity_name_str = (
-                    entity_name.classroom_name if entity_name else entity_id
-                )
+            # 使用辅助方法获取实体名称
+            entity_name_str = self._get_entity_name(entity_id, entity_type, data)
 
             logger.warning(
-                f"    [{i}] {entity_type}: {entity_name_str}, 时间: {day_names[weekday]} 第{slot}节"
+                f"    [{i}] {entity_type}: {entity_name_str}, "
+                f"时间: {day_names[weekday]} 第{slot}节"
             )
 
             for j, task_info in enumerate(conflict["tasks"], 1):
-                teacher_name = data["teachers"].get(task_info["teacher_id"], None)
-                teacher_str = (
-                    teacher_name.teacher_name
-                    if teacher_name
-                    else task_info["teacher_id"]
+                # 使用辅助方法获取名称
+                teacher_str = self._get_entity_name(
+                    task_info["teacher_id"], "教师", data
                 )
-
-                classroom_name = data["classrooms"].get(task_info["classroom_id"], None)
-                classroom_str = (
-                    classroom_name.classroom_name
-                    if classroom_name
-                    else task_info["classroom_id"]
+                classroom_str = self._get_entity_name(
+                    task_info["classroom_id"], "教室", data
                 )
 
                 logger.warning(
                     f"        课程{j}: {task_info['course_name']} | "
                     f"教师: {teacher_str} | "
                     f"教室: {classroom_str} | "
-                    f"时间: {task_info['start_slot']}-{task_info['start_slot']+task_info['slots_count']-1}节"
+                    f"时间: {task_info['start_slot']}-"
+                    f"{task_info['start_slot']+task_info['slots_count']-1}节"
                 )
 
-        if len(conflict_details) > 5:
+        if len(conflict_details) > self.MAX_DISPLAY_CONFLICTS:
             logger.warning(
-                f"    ... 还有 {len(conflict_details) - 5} 处{entity_type}冲突未显示"
+                f"    ... 还有 {len(conflict_details) - self.MAX_DISPLAY_CONFLICTS} "
+                f"处{entity_type}冲突未显示"
             )
 
     def _check_conflicts(
@@ -309,18 +338,25 @@ class SchedulingSystem:
         gene_map = {}
 
         for gene in solution:
-            task = task_dict[gene.task_id]
-            end_slot = gene.start_slot + task.slots_count - 1
+            task = task_dict.get(gene.task_id)
+            if not task:
+                logger.warning(f"任务 {gene.task_id} 不存在，跳过")
+                continue
+
+            # 预先计算时间slots（性能优化）
+            time_slots = [
+                (gene.week_day, slot)
+                for slot in range(gene.start_slot, gene.start_slot + task.slots_count)
+            ]
 
             gene_map[gene.task_id] = gene
 
-            for slot in range(gene.start_slot, end_slot + 1):
-                time_key = (gene.week_day, slot)
-                # 修复: 检查任务的所有教师,不仅仅是基因中选中的那个
+            # 批量添加（性能优化）
+            for time_key in time_slots:
+                # 修复: 检查任务的所有教师
                 for teacher_id in task.teachers:
                     teacher_schedule[teacher_id].append((time_key, gene.task_id))
                 classroom_schedule[gene.classroom_id].append((time_key, gene.task_id))
-
                 for class_id in task.classes:
                     class_schedule[class_id].append((time_key, gene.task_id))
 
@@ -351,21 +387,15 @@ class SchedulingSystem:
                         }
 
                         for task_id in task_ids:
-                            gene = gene_map[task_id]
-                            task = task_dict[task_id]
-                            offering = task.offering
+                            gene = gene_map.get(task_id)
+                            task = task_dict.get(task_id)
 
-                            if offering:
-                                course_name = data["courses"].get(
-                                    offering.course_id, None
-                                )
-                                course_name_str = (
-                                    course_name.course_name
-                                    if course_name
-                                    else "未知课程"
-                                )
-                            else:
-                                course_name_str = "未知课程"
+                            if not gene or not task:
+                                logger.warning(f"冲突分析: 任务 {task_id} 数据缺失")
+                                continue
+
+                            # 使用辅助方法获取课程名称
+                            course_name_str = self._get_course_name(task, data)
 
                             conflict_info["tasks"].append(
                                 {
@@ -404,19 +434,30 @@ class SchedulingSystem:
         capacity_violations = []
 
         for gene in solution:
-            task = task_dict[gene.task_id]
-            classroom = data["classrooms"][gene.classroom_id]
+            task = task_dict.get(gene.task_id)
+            if not task:
+                logger.warning(f"容量检查: 任务 {gene.task_id} 不存在，跳过")
+                continue
 
-            # 检查容量是否足够
-            if classroom.capacity < task.student_count:
+            classroom = data["classrooms"].get(gene.classroom_id)
+            if not classroom:
+                logger.warning(f"容量检查: 教室 {gene.classroom_id} 不存在，跳过")
+                continue
+
+            # 检查容量是否足够（添加类型验证）
+            if (
+                classroom.capacity is not None
+                and task.student_count is not None
+                and classroom.capacity < task.student_count
+            ):
+
+                # 使用辅助方法获取课程名称
+                course_name = self._get_course_name(task, data)
+
                 capacity_violations.append(
                     {
-                        "course": (
-                            data["courses"].get(task.offering.course_id).course_name
-                            if task.offering
-                            else "未知课程"
-                        ),
-                        "classroom": classroom.classroom_name,
+                        "course": course_name,
+                        "classroom": classroom.classroom_name or gene.classroom_id,
                         "capacity": classroom.capacity,
                         "students": task.student_count,
                         "shortage": task.student_count - classroom.capacity,
@@ -432,39 +473,40 @@ class SchedulingSystem:
         from collections import defaultdict
 
         classroom_usage = defaultdict(list)
-        high_waste = []  # 容量浪费严重的课程
+        high_waste = []
         total_waste_seats = 0
 
         for gene in solution:
-            task = task_dict[gene.task_id]
-            classroom = data["classrooms"][gene.classroom_id]
+            task = task_dict.get(gene.task_id)
+            classroom = data["classrooms"].get(gene.classroom_id)
+
+            if not task or not classroom:
+                continue
 
             utilization = (
-                task.student_count / classroom.capacity if classroom.capacity > 0 else 0
+                task.student_count / classroom.capacity
+                if classroom.capacity and classroom.capacity > 0
+                else 0
             )
             classroom_usage[gene.classroom_id].append(utilization)
 
             # 检查容量浪费
-            if classroom.capacity > 0:
+            if classroom.capacity and classroom.capacity > 0:
                 waste_seats = classroom.capacity - task.student_count
                 total_waste_seats += waste_seats
                 waste_ratio = waste_seats / classroom.capacity
 
-                # 根据班级规模判断是否浪费过大
-                max_waste_ratio = (
-                    0.5
-                    if task.student_count < 30
-                    else (0.4 if task.student_count < 60 else 0.3)
-                )
+                # 使用辅助方法获取最大浪费率
+                max_waste_ratio = self._get_max_waste_ratio(task.student_count)
+
                 if waste_ratio > max_waste_ratio:
+                    # 使用辅助方法获取课程名称
+                    course_name = self._get_course_name(task, data)
+
                     high_waste.append(
                         {
-                            "course": (
-                                data["courses"].get(task.offering.course_id).course_name
-                                if task.offering
-                                else "未知课程"
-                            ),
-                            "classroom": classroom.classroom_name,
+                            "course": course_name,
+                            "classroom": classroom.classroom_name or gene.classroom_id,
                             "capacity": classroom.capacity,
                             "students": task.student_count,
                             "waste_seats": waste_seats,
@@ -491,32 +533,36 @@ class SchedulingSystem:
                 f"平均每节课浪费: {total_waste_seats / len(solution):.1f} 个座位"
             )
 
-        # 找出利用率过低的教室
+        # 找出利用率过低的教室（使用常量）
         low_utilization_classrooms = [
             (classroom_id, sum(utils) / len(utils))
             for classroom_id, utils in classroom_usage.items()
-            if sum(utils) / len(utils) < 0.5
+            if sum(utils) / len(utils) < self.LOW_UTILIZATION_THRESHOLD
         ]
 
         if low_utilization_classrooms:
             logger.warning(
-                f"发现 {len(low_utilization_classrooms)} 间教室利用率过低(<50%)"
+                f"发现 {len(low_utilization_classrooms)} 间教室利用率过低"
+                f"(<{self.LOW_UTILIZATION_THRESHOLD:.0%})"
             )
 
-        # 报告容量浪费情况
+        # 报告容量浪费情况（使用常量）
         if high_waste:
             logger.warning(f"\n【容量浪费检测】")
             logger.warning(f"⚠ 发现 {len(high_waste)} 个教室容量浪费严重的课程:")
-            # 按浪费率排序
             high_waste.sort(key=lambda x: x["waste_ratio"], reverse=True)
-            for i, item in enumerate(high_waste[:10], 1):
+            for i, item in enumerate(high_waste[: self.MAX_DISPLAY_WASTE], 1):
                 logger.warning(
                     f"  [{i}] {item['course']}: 教室 {item['classroom']} "
                     f"(容量{item['capacity']}) > 学生数{item['students']}, "
-                    f"浪费 {item['waste_seats']} 个座位 (浪费率{item['waste_ratio']:.1%}, 利用率{item['utilization']:.1%})"
+                    f"浪费 {item['waste_seats']} 个座位 "
+                    f"(浪费率{item['waste_ratio']:.1%}, 利用率{item['utilization']:.1%})"
                 )
-            if len(high_waste) > 10:
-                logger.warning(f"  ... 还有 {len(high_waste) - 10} 个浪费严重的课程")
+            if len(high_waste) > self.MAX_DISPLAY_WASTE:
+                logger.warning(
+                    f"  ... 还有 {len(high_waste) - self.MAX_DISPLAY_WASTE} "
+                    f"个浪费严重的课程"
+                )
         else:
             logger.info("\n【容量浪费检测】")
             logger.info("✓ 教室容量分配合理，无严重浪费")
@@ -530,7 +576,6 @@ class SchedulingSystem:
 
         logger.info("\n【个性化要求满足情况分析】")
 
-        # 统计各类个性化要求
         total_preferences = len(data["teacher_preferences"])
         if total_preferences == 0:
             logger.info("✓ 没有设置个性化要求")
@@ -549,42 +594,43 @@ class SchedulingSystem:
         # 构建教师实际排课时间
         teacher_schedules = defaultdict(list)
         for gene in solution:
-            task = task_dict[gene.task_id]
+            task = task_dict.get(gene.task_id)
+            if not task:
+                continue
+
             # 注意：一个任务可能有多个教师
             for teacher_id in task.teachers:
                 start_slot = gene.start_slot
                 end_slot = start_slot + task.slots_count - 1
+
+                # 使用辅助方法获取课程名称
+                course_name = self._get_course_name(task, data)
+
                 teacher_schedules[teacher_id].append(
                     {
                         "weekday": gene.week_day,
                         "start_slot": start_slot,
                         "end_slot": end_slot,
-                        "course_name": (
-                            data["courses"].get(task.offering.course_id).course_name
-                            if task.offering
-                            else "未知课程"
-                        ),
+                        "course_name": course_name,
                         "task_id": gene.task_id,
                     }
                 )
 
         # 分析每个教师的个性化要求满足情况
-        violated_preferred = []  # 未满足的偏好时间
-        violated_avoided = []  # 违反的避免时间
+        violated_preferred = []
+        violated_avoided = []
 
         for teacher_id, prefs in teacher_prefs.items():
-            teacher_name = data["teachers"].get(teacher_id)
-            teacher_name_str = teacher_name.teacher_name if teacher_name else teacher_id
+            # 使用辅助方法获取教师名称
+            teacher_name_str = self._get_entity_name(teacher_id, "教师", data)
             schedule = teacher_schedules.get(teacher_id, [])
 
             # 检查偏好时间（PREFERRED）
             for pref in prefs["preferred"]:
                 if pref.weekday and pref.start_slot and pref.end_slot:
-                    # 检查是否有课程安排在这个时间段
                     found = False
                     for sch in schedule:
                         if sch["weekday"] == pref.weekday:
-                            # 检查时间段是否有交集
                             if not (
                                 sch["end_slot"] < pref.start_slot
                                 or sch["start_slot"] > pref.end_slot
@@ -607,10 +653,8 @@ class SchedulingSystem:
             # 检查避免时间（AVOIDED）
             for pref in prefs["avoided"]:
                 if pref.weekday and pref.start_slot and pref.end_slot:
-                    # 检查是否有课程安排在这个时间段
                     for sch in schedule:
                         if sch["weekday"] == pref.weekday:
-                            # 检查时间段是否有交集
                             if not (
                                 sch["end_slot"] < pref.start_slot
                                 or sch["start_slot"] > pref.end_slot
@@ -629,38 +673,46 @@ class SchedulingSystem:
                                 )
                                 break
 
-        # 输出分析结果
+        # 输出分析结果（使用常量）
         day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
-        # 偏好时间未满足情况
         if violated_preferred:
             logger.warning(f"\n⚠ 发现 {len(violated_preferred)} 条偏好时间未被满足:")
-            for i, item in enumerate(violated_preferred[:10], 1):  # 只显示前10条
+            for i, item in enumerate(
+                violated_preferred[: self.MAX_DISPLAY_PREFERENCES], 1
+            ):
                 logger.warning(
                     f"  [{i}] 教师: {item['teacher_name']}, "
-                    f"偏好时间: {day_names[item['weekday']]} {item['start_slot']}-{item['end_slot']}节, "
+                    f"偏好时间: {day_names[item['weekday']]} "
+                    f"{item['start_slot']}-{item['end_slot']}节, "
                     f"惩罚分数: {item['penalty_score']}"
                 )
-            if len(violated_preferred) > 10:
+            if len(violated_preferred) > self.MAX_DISPLAY_PREFERENCES:
                 logger.warning(
-                    f"  ... 还有 {len(violated_preferred) - 10} 条偏好时间未满足"
+                    f"  ... 还有 "
+                    f"{len(violated_preferred) - self.MAX_DISPLAY_PREFERENCES} "
+                    f"条偏好时间未满足"
                 )
         else:
             logger.info("✓ 所有偏好时间都已满足")
 
-        # 避免时间被违反情况
         if violated_avoided:
             logger.warning(f"\n⚠ 发现 {len(violated_avoided)} 条避免时间被违反:")
-            for i, item in enumerate(violated_avoided[:10], 1):  # 只显示前10条
+            for i, item in enumerate(
+                violated_avoided[: self.MAX_DISPLAY_PREFERENCES], 1
+            ):
                 logger.warning(
                     f"  [{i}] 教师: {item['teacher_name']}, "
-                    f"避免时间: {day_names[item['weekday']]} {item['start_slot']}-{item['end_slot']}节, "
+                    f"避免时间: {day_names[item['weekday']]} "
+                    f"{item['start_slot']}-{item['end_slot']}节, "
                     f"实际课程: {item['course_name']} ({item['course_time']}), "
                     f"惩罚分数: {item['penalty_score']}"
                 )
-            if len(violated_avoided) > 10:
+            if len(violated_avoided) > self.MAX_DISPLAY_PREFERENCES:
                 logger.warning(
-                    f"  ... 还有 {len(violated_avoided) - 10} 条避免时间被违反"
+                    f"  ... 还有 "
+                    f"{len(violated_avoided) - self.MAX_DISPLAY_PREFERENCES} "
+                    f"条避免时间被违反"
                 )
         else:
             logger.info("✓ 所有避免时间都已遵守")
@@ -679,8 +731,38 @@ class SchedulingSystem:
         )
 
         logger.info(
-            f"\n个性化要求总体满足率: {satisfaction_rate:.1f}% ({satisfied_count}/{total_prefs_count})"
+            f"\n个性化要求总体满足率: {satisfaction_rate:.1f}% "
+            f"({satisfied_count}/{total_prefs_count})"
         )
+
+    # === 辅助方法 ===
+    def _get_course_name(self, task, data: Dict) -> str:
+        """获取课程名称（避免重复代码）"""
+        if not task.offering:
+            return "未知课程"
+        course = data["courses"].get(task.offering.course_id)
+        return course.course_name if course else "未知课程"
+
+    def _get_entity_name(self, entity_id: str, entity_type: str, data: Dict) -> str:
+        """获取实体名称（教师/班级/教室）"""
+        if entity_type == "教师":
+            entity = data["teachers"].get(entity_id)
+            return entity.teacher_name if entity else entity_id
+        elif entity_type == "班级":
+            entity = data["classes"].get(entity_id)
+            return entity.class_name if entity else entity_id
+        else:  # 教室
+            entity = data["classrooms"].get(entity_id)
+            return entity.classroom_name if entity else entity_id
+
+    def _get_max_waste_ratio(self, student_count: int) -> float:
+        """根据班级规模获取最大容量浪费率"""
+        if student_count < self.SMALL_CLASS_THRESHOLD:
+            return self.WASTE_RATIO_SMALL_CLASS
+        elif student_count < self.MID_CLASS_THRESHOLD:
+            return self.WASTE_RATIO_MID_CLASS
+        else:
+            return self.WASTE_RATIO_LARGE_CLASS
 
     def cleanup(self):
         """清理资源"""

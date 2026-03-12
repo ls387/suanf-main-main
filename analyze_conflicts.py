@@ -12,11 +12,87 @@ from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill
 
+# 导入合法时间块定义
+from data_models import get_valid_time_slots
+
 # 设置标准输出编码为UTF-8
 if sys.platform == "win32":
     import io
 
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+
+def load_teacher_blackouts(cursor):
+    """从数据库加载教师禁止时间
+
+    Returns:
+        dict: teacher_id -> set of (weekday, slot)
+    """
+    from collections import defaultdict
+
+    blackouts = defaultdict(set)
+    try:
+        cursor.execute(
+            "SELECT teacher_id, weekday, start_slot, end_slot FROM teacher_blackout_times"
+        )
+        for row in cursor.fetchall():
+            teacher_id = str(row["teacher_id"])
+            for slot in range(row["start_slot"], row["end_slot"] + 1):
+                blackouts[teacher_id].add((row["weekday"], slot))
+    except Exception:
+        pass  # 表不存在时静默跳过
+    return dict(blackouts)
+
+
+def load_classroom_features(cursor):
+    """从数据库加载教室特征和课程特征要求
+
+    Returns:
+        tuple: (classroom_features, offering_features)
+            classroom_features: dict, classroom_id -> set of feature_id
+            offering_features: dict, offering_id -> set of feature_id (仅mandatory)
+    """
+    from collections import defaultdict
+
+    classroom_features = defaultdict(set)
+    offering_features = defaultdict(set)
+
+    try:
+        cursor.execute("SELECT classroom_id, feature_id FROM classroom_has_features")
+        for row in cursor.fetchall():
+            classroom_features[str(row["classroom_id"])].add(row["feature_id"])
+    except Exception:
+        pass
+
+    try:
+        cursor.execute(
+            "SELECT offering_id, feature_id FROM offering_requires_features WHERE is_mandatory = 1"
+        )
+        for row in cursor.fetchall():
+            offering_features[row["offering_id"]].add(row["feature_id"])
+    except Exception:
+        pass
+
+    return dict(classroom_features), dict(offering_features)
+
+
+def spans_period_boundary(start_slot, slots_count):
+    """检查课程是否跨越时段边界（上午1-5、下午6-10、晚上11-13不可跨时段连堂）
+
+    Args:
+        start_slot: 起始节次
+        slots_count: 连排节数
+
+    Returns:
+        bool: 如果跨越时段边界返回True
+    """
+    end_slot = start_slot + slots_count - 1
+    # 上午: 1-5, 下午: 6-10, 晚上: 11-13
+    if start_slot <= 5 and end_slot >= 6:  # 跨越上午和下午
+        return True
+    if start_slot <= 10 and end_slot >= 11:  # 跨越下午和晚上
+        return True
+    return False
 
 
 def has_week_overlap(weeks1, weeks2):
@@ -307,7 +383,7 @@ def analyze_schedule_conflicts(version_id):
 
             # 如果没有自定义周次,根据week_pattern生成
             start_week = result.get("start_week") or 1
-            end_week = result.get("end_week") or 18
+            end_week = result.get("end_week") or 17
             week_pattern = result.get("week_pattern") or "CONTINUOUS"
 
             if week_pattern == "CONTINUOUS":
@@ -907,6 +983,10 @@ def optimize_conflicts(
     print("第三阶段：优化容量利用率和满足个性化要求（软约束）")
     print("=" * 80)
 
+    # 加载教师禁止时间和教室特征
+    teacher_blackouts = load_teacher_blackouts(cursor)
+    classroom_features, offering_features = load_classroom_features(cursor)
+
     # ========== 第一阶段：优化容量不足冲突（最高优先级） ==========
     capacity_adjustments = []
     day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -971,13 +1051,28 @@ def optimize_conflicts(
             for slot in range(start_slot, end_slot + 1):
                 occupied.update(batch_allocated[(weekday, slot)])
 
-            # 寻找容量足够且未被占用的教室
+            # 寻找容量足够且未被占用的教室（同时检查特征要求）
+            # 获取该课程的特征要求
+            offering_id = cap_conflict.get("offering_id")
+            if not offering_id:
+                # 从results中查找offering_id
+                for r in results:
+                    if r["task_id"] == cap_conflict["task_id"]:
+                        offering_id = r.get("offering_id")
+                        break
+            required_feats = (
+                offering_features.get(offering_id, set()) if offering_id else set()
+            )
+
             suitable_classrooms = [
                 room
                 for room in all_classrooms
                 if room["capacity"] >= required_capacity
                 and room["classroom_id"] not in occupied
                 and room["classroom_id"] != current_classroom_id
+                and required_feats.issubset(
+                    classroom_features.get(str(room["classroom_id"]), set())
+                )
             ]
 
             if suitable_classrooms:
@@ -1145,11 +1240,24 @@ def optimize_conflicts(
         found_slot = False
         time_slots = []
 
-        # 生成可能的时间槽 (周一到周五, 1-13节)
+        # 生成可能的时间槽 (周一到周五, 使用合法时间块)
         for weekday in range(1, 6):  # 周一到周五
-            for start_slot in range(1, 14 - slots_count + 1):
-                # 跳过周四下午
-                if weekday == 4 and start_slot >= 6:
+            for start_slot, _ in get_valid_time_slots(slots_count):
+                # 跳过周四下午（第6-10节不可排课，第11-13节晚上可以）
+                if weekday == 4 and 6 <= start_slot <= 10:
+                    continue
+
+                # 检查教师禁止时间（blackout）
+                has_blackout = False
+                for tid in teacher_ids:
+                    blackout_set = teacher_blackouts.get(tid, set())
+                    for slot in range(start_slot, start_slot + slots_count):
+                        if (weekday, slot) in blackout_set:
+                            has_blackout = True
+                            break
+                    if has_blackout:
+                        break
+                if has_blackout:
                     continue
 
                 # 检查是否有冲突
@@ -1230,8 +1338,8 @@ def optimize_conflicts(
             available_for_class = []
             day_names_local = ["", "周一", "周二", "周三", "周四", "周五"]
             for weekday in range(1, 6):
-                for start_slot in range(1, 14 - slots_count + 1):
-                    if weekday == 4 and start_slot >= 6:
+                for start_slot, _ in get_valid_time_slots(slots_count):
+                    if weekday == 4 and 6 <= start_slot <= 10:
                         continue
 
                     # 只检查班级冲突
@@ -1324,6 +1432,9 @@ def optimize_utilization_and_preferences(
 ):
     """第三阶段：优化容量利用率，然后优化个性化要求"""
 
+    # 加载教室特征数据
+    classroom_features, offering_features = load_classroom_features(cursor)
+
     # 先优化利用率
     if high_waste_data:
         print(f"\n发现 {len(high_waste_data)} 个容量浪费严重的课程，尝试优化...")
@@ -1388,12 +1499,26 @@ def optimize_utilization_and_preferences(
             target_min_capacity = int(student_count / 0.95)  # 最小容量（达到95%利用率）
             target_max_capacity = int(student_count / 0.80)  # 最大容量（达到80%利用率）
 
+            # 获取该课程的特征要求
+            task_id = waste["task_id"]
+            offering_id = None
+            for r in results:
+                if r["task_id"] == task_id:
+                    offering_id = r.get("offering_id")
+                    break
+            required_feats = (
+                offering_features.get(offering_id, set()) if offering_id else set()
+            )
+
             suitable_classrooms = [
                 room
                 for room in all_classrooms
                 if target_min_capacity <= room["capacity"] <= target_max_capacity
                 and room["classroom_id"] not in occupied
                 and room["classroom_id"] != current_classroom_id
+                and required_feats.issubset(
+                    classroom_features.get(str(room["classroom_id"]), set())
+                )
             ]
 
             if suitable_classrooms:
@@ -1446,16 +1571,66 @@ def optimize_utilization_and_preferences(
 
             confirm = input("\n确认应用这些利用率优化? (y/n): ").strip().lower()
             if confirm == "y":
+                applied = 0
                 for adj in utilization_adjustments:
+                    # 先读取该排课的时间信息（week_day, start_slot）以判断是否会与目标教室产生冲突
+                    cursor.execute(
+                        "SELECT version_id, week_day, start_slot FROM schedules WHERE schedule_id = %s",
+                        (adj["schedule_id"],),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        print(f"跳过: 找不到 schedule_id={adj['schedule_id']}")
+                        continue
+
+                    v_id = row["version_id"]
+                    week_day = row["week_day"]
+                    start_slot = row["start_slot"]
+
+                    # 获取当前课程的节数来计算结束节次
+                    cursor.execute(
+                        "SELECT tt.slots_count FROM schedules s JOIN teaching_tasks tt ON s.task_id = tt.task_id WHERE s.schedule_id = %s",
+                        (adj["schedule_id"],),
+                    )
+                    slots_row = cursor.fetchone()
+                    cur_slots_count = slots_row["slots_count"] if slots_row else 1
+                    end_slot = start_slot + cur_slots_count - 1
+
+                    # 检查目标教室在同一版本/星期是否有时间段重叠的课程
+                    cursor.execute(
+                        """SELECT s.schedule_id FROM schedules s 
+                        JOIN teaching_tasks tt ON s.task_id = tt.task_id
+                        WHERE s.version_id=%s AND s.classroom_id=%s AND s.week_day=%s
+                          AND s.start_slot <= %s AND (s.start_slot + tt.slots_count - 1) >= %s
+                          AND s.schedule_id != %s""",
+                        (
+                            v_id,
+                            adj["new_classroom_id"],
+                            week_day,
+                            end_slot,
+                            start_slot,
+                            adj["schedule_id"],
+                        ),
+                    )
+                    conflict = cursor.fetchone()
+                    if conflict:
+                        print(
+                            f"跳过: 教室 {adj['new_classroom']} 在{adj['time']}已被占用 (冲突 schedule_id={conflict.get('schedule_id')})"
+                        )
+                        continue
+
                     update_query = (
                         "UPDATE schedules SET classroom_id = %s WHERE schedule_id = %s"
                     )
                     cursor.execute(
                         update_query, (adj["new_classroom_id"], adj["schedule_id"])
                     )
+                    applied += 1
 
                 conn.commit()
-                print(f"✓ 已应用 {len(utilization_adjustments)} 个利用率优化")
+                print(
+                    f"✓ 已应用 {applied} 个利用率优化 (共 {len(utilization_adjustments)} 个候选)"
+                )
             else:
                 print("已取消利用率优化")
         else:
@@ -1479,6 +1654,9 @@ def optimize_utilization_and_preferences(
 def optimize_preferences(version_id, results, task_classes, cursor, conn):
     """第二阶段：在不违反硬约束的前提下，优化个性化要求（教师偏好时间）"""
     from collections import defaultdict
+
+    # 加载教师禁止时间
+    teacher_blackouts = load_teacher_blackouts(cursor)
 
     # 加载offering_weeks表数据
     cursor.execute("SELECT offering_id, week_number FROM offering_weeks")
@@ -1683,6 +1861,7 @@ def optimize_preferences(version_id, results, task_classes, cursor, conn):
                     schedule_id,
                     avoid_time=(weekday, start_slot, end_slot),
                     get_weeks_func=get_weeks,
+                    teacher_blackouts=teacher_blackouts,
                 )
 
                 if new_time:
@@ -1727,6 +1906,7 @@ def optimize_preferences(version_id, results, task_classes, cursor, conn):
                 schedule_id,
                 prefer_time=(weekday, start_slot, end_slot),
                 get_weeks_func=get_weeks,
+                teacher_blackouts=teacher_blackouts,
             )
 
             if (
@@ -1802,6 +1982,9 @@ def optimize_preferences(version_id, results, task_classes, cursor, conn):
 def optimize_task_relations(version_id, results, task_classes, cursor, conn):
     """优化任务关系约束违反情况"""
     from collections import defaultdict
+
+    # 加载教师禁止时间
+    teacher_blackouts = load_teacher_blackouts(cursor)
 
     print("\n" + "-" * 80)
     print("优化任务关系约束（课程多次上课的时间关系）")
@@ -2010,7 +2193,11 @@ def optimize_task_relations(version_id, results, task_classes, cursor, conn):
         class_ids = [cls["class_id"] for cls in task_classes[task_b_id]]
         weeks_b = get_weeks(result_b)
 
-        for start_slot in range(1, 14 - slots_count + 1):
+        for start_slot, _ in get_valid_time_slots(slots_count):
+            # 跳过周四下午（第6-10节不可排课，第11-13节晚上可以）
+            if target_weekday == 4 and 6 <= start_slot <= 10:
+                continue
+
             if check_time_available(
                 target_weekday,
                 start_slot,
@@ -2020,6 +2207,7 @@ def optimize_task_relations(version_id, results, task_classes, cursor, conn):
                 class_ids,
                 occupied_times,
                 weeks_b,
+                teacher_blackouts=teacher_blackouts,
             ):
                 adjustments.append(
                     {
@@ -2029,6 +2217,7 @@ def optimize_task_relations(version_id, results, task_classes, cursor, conn):
                         "old_start": sch_b["start_slot"],
                         "new_weekday": target_weekday,
                         "new_start": start_slot,
+                        "new_end_slot": start_slot + slots_count - 1,
                         "course": const["course_name"],
                         "reason": f"满足任务关系约束: {const['constraint_type']}",
                     }
@@ -2059,10 +2248,15 @@ def optimize_task_relations(version_id, results, task_classes, cursor, conn):
                 cursor.execute(
                     """
                     UPDATE schedules 
-                    SET week_day = %s, start_slot = %s 
+                    SET week_day = %s, start_slot = %s, end_slot = %s
                     WHERE schedule_id = %s
                     """,
-                    (adj["new_weekday"], adj["new_start"], adj["schedule_id"]),
+                    (
+                        adj["new_weekday"],
+                        adj["new_start"],
+                        adj["new_end_slot"],
+                        adj["schedule_id"],
+                    ),
                 )
             conn.commit()
             print(f"\n✅ 已成功优化 {len(adjustments)} 处任务关系约束违反")
@@ -2081,6 +2275,7 @@ def find_alternative_time_for_preference(
     avoid_time=None,
     prefer_time=None,
     get_weeks_func=None,
+    teacher_blackouts=None,
 ):
     """为课程寻找替代时间，考虑个性化要求
 
@@ -2117,8 +2312,11 @@ def find_alternative_time_for_preference(
     # 如果有偏好时间，优先考虑
     if prefer_time:
         pref_weekday, pref_start, pref_end = prefer_time
-        for start_slot in range(pref_start, min(pref_end, 14 - slots_count) + 1):
-            if pref_weekday == 4 and start_slot >= 6:  # 周四下午
+        for start_slot, _ in get_valid_time_slots(slots_count):
+            # 只考虑在偏好时间范围内的合法时间块
+            if start_slot < pref_start or start_slot + slots_count - 1 > pref_end:
+                continue
+            if pref_weekday == 4 and 6 <= start_slot <= 10:  # 周四下午
                 continue
 
             if check_time_available(
@@ -2130,13 +2328,14 @@ def find_alternative_time_for_preference(
                 classes,
                 occupied_times,
                 weeks=weeks,
+                teacher_blackouts=teacher_blackouts,
             ):
                 candidate_times.append((pref_weekday, start_slot, 0))  # 优先级0最高
 
     # 搜索其他可用时间
     for weekday in range(1, 6):  # 周一到周五
-        for start_slot in range(1, 14 - slots_count + 1):
-            if weekday == 4 and start_slot >= 6:  # 周四下午
+        for start_slot, _ in get_valid_time_slots(slots_count):
+            if weekday == 4 and 6 <= start_slot <= 10:  # 周四下午
                 continue
 
             # 跳过避免时间
@@ -2160,6 +2359,7 @@ def find_alternative_time_for_preference(
                 classes,
                 occupied_times,
                 weeks=weeks,
+                teacher_blackouts=teacher_blackouts,
             ):
                 priority = 1 if (weekday, start_slot) != (old_weekday, old_start) else 2
                 candidate_times.append((weekday, start_slot, priority))
@@ -2183,8 +2383,21 @@ def check_time_available(
     class_ids,
     occupied_times,
     weeks=None,
+    teacher_blackouts=None,
 ):
-    """检查指定时间段是否可用（无硬约束冲突）- 考虑周次重叠"""
+    """检查指定时间段是否可用（无硬约束冲突）- 考虑周次重叠和教师禁止时间
+
+    Args:
+        teacher_blackouts: dict, teacher_id -> set of (weekday, slot)，教师禁止上课的时间
+    """
+    # 检查教师禁止时间（blackout）
+    if teacher_blackouts:
+        for tid in teacher_ids:
+            blackout_set = teacher_blackouts.get(tid, set())
+            for slot in range(start_slot, start_slot + slots_count):
+                if (weekday, slot) in blackout_set:
+                    return False
+
     for slot in range(start_slot, start_slot + slots_count):
         time_key = (weekday, slot)
 
@@ -2505,7 +2718,7 @@ def regenerate_conflict_report_after_optimization(version_id, cursor):
             return offering_weeks[offering_id]
 
         start_week = result.get("start_week") or 1
-        end_week = result.get("end_week") or 18
+        end_week = result.get("end_week") or 17
         week_pattern = result.get("week_pattern") or "CONTINUOUS"
 
         if week_pattern == "CONTINUOUS":
@@ -2704,3 +2917,52 @@ def regenerate_conflict_report_after_optimization(version_id, cursor):
         print(f"\n✓ 优化后冲突报告已导出到: {filename}")
     else:
         print("\n✓ 无需导出报告（所有容量冲突已解决）")
+
+
+def main():
+    """主函数"""
+    if len(sys.argv) < 2:
+        print("用法: python analyze_conflicts.py <version_id> [--export] [--optimize]")
+        print("  version_id: 排课版本ID")
+        print("  --export  : 导出冲突报告到Excel（可选）")
+        print("  --optimize: 自动优化冲突（可选）")
+        print("\n示例:")
+        print("  python analyze_conflicts.py 1")
+        print("  python analyze_conflicts.py 1 --export")
+        print("  python analyze_conflicts.py 1 --export --optimize")
+        sys.exit(1)
+
+    try:
+        version_id = int(sys.argv[1])
+    except ValueError:
+        print(f"错误: 版本ID必须是整数，收到: {sys.argv[1]}")
+        sys.exit(1)
+
+    # 解析参数
+    export_excel = "--export" in sys.argv
+    auto_optimize = "--optimize" in sys.argv
+
+    print(f"\n{'='*60}")
+    print(f"排课冲突分析工具 - 版本 {version_id}")
+    print(f"{'='*60}\n")
+
+    # 分析冲突
+    analyze_schedule_conflicts(version_id)
+
+    # 导出Excel报告（如果指定）
+    if export_excel:
+        print(f"\n{'='*60}")
+        print("导出Excel报告中...")
+        print(f"{'='*60}\n")
+        # TODO: 调用导出函数（需要先收集冲突数据）
+
+    # 自动优化（如果指定）
+    if auto_optimize:
+        print(f"\n{'='*60}")
+        print("开始自动优化冲突...")
+        print(f"{'='*60}\n")
+        # TODO: 调用优化函数
+
+
+if __name__ == "__main__":
+    main()
