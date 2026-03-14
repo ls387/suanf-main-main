@@ -1422,10 +1422,18 @@ class SchedulingGeneticAlgorithm:
         """进化主循环"""
         logger.info("开始遗传算法进化")
 
-        # 初始化种群
-        population = [
-            self.create_individual() for _ in range(self.config["population_size"])
-        ]
+        logger.info(
+            f"正在初始化种群 (规模: {self.config['population_size']})，这可能需要一些时间..."
+        )
+
+        # 初始化种群（带进度日志）
+        population = []
+        for i in range(self.config["population_size"]):
+            if i > 0 and i % 10 == 0:
+                logger.info(f"已初始化 {i}/{self.config['population_size']} 个个体...")
+            population.append(self.create_individual())
+
+        logger.info("种群初始化完成！")
 
         best_fitness = float("-inf")
         stagnation_count = 0
