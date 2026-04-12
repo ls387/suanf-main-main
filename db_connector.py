@@ -99,9 +99,23 @@ class DataLoader:
     def __init__(self, db_connector: DatabaseConnector):
         self.db = db_connector
 
-    def load_all_data(self, semester: str) -> Dict:
-        """加载所有排课相关数据"""
+    def load_all_data(self, semester: str, grades: List[int] = None) -> Dict:
+        """
+        加载所有排课相关数据
+
+        Args:
+            semester: 学期
+            grades: 年级列表，如 [1, 2, 3]；None 表示加载所有年级
+        """
         logger.info(f"开始加载学期 {semester} 的排课数据")
+
+        # 存储 grades 为临时实例变量，供后续方法使用
+        self._current_grades = grades
+
+        if grades:
+            logger.info(f"按年级过滤: {grades}")
+        else:
+            logger.info("加载所有年级")
 
         data = {
             "campuses": self._load_campuses(),
@@ -118,7 +132,7 @@ class DataLoader:
             "teacher_blackout_times": self._load_teacher_blackout_times(semester),
             "teacher_preferences": self._load_teacher_preferences(),
             "task_relations": self._load_task_relations(semester),
-            "offering_weeks": self._load_offering_weeks(),  # 新增
+            "offering_weeks": self._load_offering_weeks(),
         }
 
         # 填充教学任务的详细信息
@@ -146,9 +160,18 @@ class DataLoader:
         return {row["major_id"]: Major(**row) for row in rows}
 
     def _load_classes(self) -> Dict[str, Class]:
-        """加载班级数据"""
-        query = "SELECT class_id, class_name, grade, student_count, major_id, education_system FROM classes"
-        rows = self.db.execute_query(query)
+        """加载班级数据（支持按年级过滤）"""
+        if hasattr(self, "_current_grades") and self._current_grades:
+            # 按年级过滤
+            query = "SELECT class_id, class_name, grade, student_count, major_id, education_system FROM classes WHERE grade IN ({})".format(
+                ",".join(["%s"] * len(self._current_grades))
+            )
+            rows = self.db.execute_query(query, tuple(self._current_grades))
+        else:
+            # 加载所有年级
+            query = "SELECT class_id, class_name, grade, student_count, major_id, education_system FROM classes"
+            rows = self.db.execute_query(query)
+
         return {row["class_id"]: Class(**row) for row in rows}
 
     def _load_teachers(self) -> Dict[str, Teacher]:
@@ -217,15 +240,32 @@ class DataLoader:
         return {row["group_id"]: TeachingGroup(**row) for row in rows}
 
     def _load_teaching_tasks(self, semester: str) -> List[TeachingTask]:
-        """加载教学任务数据"""
-        query = """
+        """加载教学任务数据（支持按年级过滤）"""
+        if hasattr(self, "_current_grades") and self._current_grades:
+            # 按年级过滤：通过 offering_classes 和 classes 表
+            grades_placeholders = ",".join(["%s"] * len(self._current_grades))
+            query = f"""
+        SELECT DISTINCT tt.task_id, tt.offering_id, tt.group_id, tt.task_sequence, tt.slots_count
+        FROM teaching_tasks tt
+        JOIN course_offerings co ON tt.offering_id = co.offering_id
+        LEFT JOIN offering_classes oc ON tt.offering_id = oc.offering_id
+        LEFT JOIN classes c ON oc.class_id = c.class_id
+        WHERE co.semester = %s AND c.grade IN ({grades_placeholders})
+        ORDER BY tt.task_id
+        """
+            params = [semester] + list(self._current_grades)
+            rows = self.db.execute_query(query, tuple(params))
+        else:
+            # 加载所有年级
+            query = """
         SELECT tt.task_id, tt.offering_id, tt.group_id, tt.task_sequence, tt.slots_count
         FROM teaching_tasks tt
         JOIN course_offerings co ON tt.offering_id = co.offering_id
         WHERE co.semester = %s
         ORDER BY tt.task_id
         """
-        rows = self.db.execute_query(query, (semester,))
+            rows = self.db.execute_query(query, (semester,))
+
         return [TeachingTask(**row) for row in rows]
 
     def _load_teacher_blackout_times(self, semester: str) -> List[TeacherBlackoutTime]:
@@ -407,6 +447,33 @@ class DataLoader:
                     )
             else:
                 task.weeks = set()  # 默认空集
+
+        # 【多年级支持】数据清理：确保任务的所有班级都在 data['classes'] 中
+        if hasattr(self, "_current_grades") and self._current_grades:
+            tasks_to_remove = []
+            for task in data["teaching_tasks"]:
+                # 移除不在 data["classes"] 中的班级
+                valid_classes = [c for c in task.classes if c in data["classes"]]
+                task.classes = valid_classes
+
+                # 如果任务所有班级都被过滤掉，标记为移除
+                if not valid_classes:
+                    tasks_to_remove.append(task.task_id)
+                    logger.warning(
+                        f"任务 {task.task_id} 的所有班级都不在指定年级范围内，已移除"
+                    )
+
+            # 从列表中移除不符合条件的任务
+            if tasks_to_remove:
+                original_count = len(data["teaching_tasks"])
+                data["teaching_tasks"] = [
+                    t
+                    for t in data["teaching_tasks"]
+                    if t.task_id not in tasks_to_remove
+                ]
+                logger.info(
+                    f"移除了 {len(tasks_to_remove)} 个不符合年级条件的任务 (从 {original_count} 个中)"
+                )
 
         logger.info("教学任务详细信息填充完成")
 

@@ -138,7 +138,9 @@ class SchedulingSystem:
 
         return True
 
-    def run_scheduling(self, version_id: int, ga_config: Dict = None) -> bool:
+    def run_scheduling(
+        self, version_id: int, grades: List[int] = None, ga_config: Dict = None
+    ) -> bool:
         """运行排课算法"""
         try:
             start_time = time.time()
@@ -158,7 +160,9 @@ class SchedulingSystem:
 
             # 加载数据
             logger.info(f"开始加载学期 {semester} 的数据")
-            data = self.data_loader.load_all_data(semester)
+            if grades:
+                logger.info(f"限制年级范围: {grades}")
+            data = self.data_loader.load_all_data(semester, grades)
 
             # 验证数据完整性
             if not self.validate_data_integrity(data):
@@ -797,6 +801,12 @@ def parse_arguments():
     parser.add_argument(
         "--max-stagnation", type=int, default=50, help="最大停滞代数 (默认: 50)"
     )
+    parser.add_argument(
+        "--grades",
+        type=str,
+        default=None,
+        help="年级范围（格式：1,2,3 或 all；默认加载所有年级）",
+    )
 
     return parser.parse_args()
 
@@ -804,6 +814,15 @@ def parse_arguments():
 def main():
     """主函数"""
     args = parse_arguments()
+
+    # 解析年级参数
+    grades = None
+    if args.grades and args.grades != "all":
+        try:
+            grades = [int(g.strip()) for g in args.grades.split(",")]
+        except ValueError:
+            logger.error(f"年级参数格式错误: {args.grades}")
+            sys.exit(1)
 
     # 构建遗传算法配置
     ga_config = {
@@ -820,6 +839,8 @@ def main():
     logger.info("智能排课系统启动")
     logger.info("=" * 60)
     logger.info(f"版本ID: {args.version}")
+    if grades:
+        logger.info(f"年级范围: {grades}")
     logger.info(f"遗传算法配置: {ga_config}")
 
     # 初始化系统
@@ -830,7 +851,7 @@ def main():
         system.setup_database_connection()
 
         # 运行排课
-        success = system.run_scheduling(args.version, ga_config)
+        success = system.run_scheduling(args.version, grades, ga_config)
 
         if success:
             logger.info("排课任务完成成功！")
