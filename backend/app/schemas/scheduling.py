@@ -8,6 +8,7 @@ from typing import Optional
 
 class SchedulingRequest(BaseModel):
     """排课请求"""
+
     version_id: int = Field(..., description="排课版本ID")
     population: int = Field(100, ge=10, le=500, description="种群大小")
     generations: int = Field(200, ge=10, le=1000, description="进化代数")
@@ -20,6 +21,7 @@ class SchedulingRequest(BaseModel):
 
 class SchedulingResponse(BaseModel):
     """排课响应"""
+
     success: bool = Field(..., description="是否成功")
     message: str = Field(..., description="消息")
     best_fitness: Optional[float] = Field(None, description="最佳适应度")
@@ -28,4 +30,7 @@ class SchedulingResponse(BaseModel):
     scheduled_tasks: Optional[int] = Field(None, description="已排课任务数")
     execution_time: Optional[float] = Field(None, description="执行时间(秒)")
     conflicts: Optional[dict] = Field(None, description="冲突统计")
-
+    average_utilization_rate: Optional[float] = Field(
+        None, description="平均容量利用率(%)"
+    )
+    classroom_reuse_rate: Optional[float] = Field(None, description="教室复用率(0-100)")

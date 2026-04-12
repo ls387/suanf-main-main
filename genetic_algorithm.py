@@ -81,6 +81,7 @@ class SchedulingGeneticAlgorithm:
                 "teacher_preference": 100,  # 适度调整：平衡教师偏好
                 "classroom_continuity": 300,  # 大幅提高：强烈鼓励同教室连续上课
                 "utilization_waste": 200,  # 大幅提高：强制提高教室利用率
+                "daily_classroom_variety": 300,  # 同一天多教室惩罚权重
                 "student_overload": 150,  # 适度调整：避免学生过载
                 "task_relation": 300,  # 保持：重视课程关系
                 "required_night_penalty": 400,  # 保持：必修课避免晚上
@@ -638,7 +639,9 @@ class SchedulingGeneticAlgorithm:
                     if preferred_classrooms
                     else set()
                 )
-                preference_bonus = -0.15 if is_preferred else 0  # 负数表示更优先
+                preference_bonus = (
+                    -0.25 if is_preferred else 0
+                )  # 负数表示更优先（权重增强：从-0.15提升至-0.25）
 
                 # 优化后的利用率评分：更严格的容量匹配
                 if 0.80 <= utilization <= 0.95:
@@ -870,6 +873,9 @@ class SchedulingGeneticAlgorithm:
 
         # 连堂课同教室
         penalty += self._check_classroom_continuity(individual)
+
+        # 同一天多教室惩罚（新增）
+        penalty += self._check_daily_classroom_variety(individual)
 
         # 教室利用率
         penalty += self._check_utilization_waste(individual)
@@ -1138,6 +1144,40 @@ class SchedulingGeneticAlgorithm:
                 penalty += (waste_ratio * waste_ratio * 500) * self.config[
                     "penalty_scores"
                 ]["utilization_waste"]
+
+        return penalty
+
+    def _check_daily_classroom_variety(self, individual: List[Gene]) -> float:
+        """检查同一天多教室使用（软约束）
+
+        规则：同一教师在同一天使用>1间教室时进行惩罚
+        惩罚公式：(教室数 - 1) × 300
+        目的：减少教师一天内的教室切换，提高教室复用效率
+        """
+        penalty = 0
+
+        # 按教师和日期分组
+        teacher_daily_classrooms = defaultdict(lambda: defaultdict(set))
+
+        for gene in individual:
+            task = self.task_dict[gene.task_id]
+
+            # 记录教师在该天使用的教室
+            for teacher_id in task.teachers:
+                teacher_daily_classrooms[teacher_id][gene.week_day].add(
+                    gene.classroom_id
+                )
+
+        # 检查每个教师每天的教室数量
+        for teacher_id, daily_classrooms in teacher_daily_classrooms.items():
+            for weekday, classrooms in daily_classrooms.items():
+                classroom_count = len(classrooms)
+
+                # 如果一天内使用多间教室，则惩罚
+                if classroom_count > 1:
+                    penalty += (classroom_count - 1) * self.config[
+                        "penalty_scores"
+                    ].get("daily_classroom_variety", 300)
 
         return penalty
 
