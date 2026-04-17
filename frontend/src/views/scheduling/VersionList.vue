@@ -81,6 +81,16 @@
 
             <el-button
               size="small"
+              type="warning"
+              link
+              v-if="row.status === 'published'"
+              @click="$router.push(`/scheduling/drag?source=${row.version_id}`)"
+            >
+              手动调课
+            </el-button>
+
+            <el-button
+              size="small"
               type="success"
               link
               v-if="row.status === 'draft'"

@@ -21,6 +21,17 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="设施" min-width="160">
+          <template #default="{ row }">
+            <el-tag
+              v-for="fid in row.features"
+              :key="fid"
+              size="small"
+              style="margin-right: 4px;"
+            >{{ featureLabel(fid) }}</el-tag>
+            <span v-if="!row.features?.length" style="color:#c0c4cc;">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="handleEdit(row)">编辑</el-button>
@@ -29,8 +40,8 @@
         </el-table-column>
       </el-table>
     </el-card>
-    
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px">
+
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px">
       <el-form :model="form" :rules="rules" ref="formRef" label-width="100px">
         <el-form-item label="教室编号" prop="classroom_id">
           <el-input v-model="form.classroom_id" :disabled="isEdit" />
@@ -53,6 +64,21 @@
         <el-form-item label="是否可用">
           <el-switch v-model="form.is_available" />
         </el-form-item>
+        <el-form-item label="设施特征">
+          <el-select
+            v-model="form.features"
+            multiple
+            placeholder="请选择设施"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="f in featureOptions"
+              :key="f.feature_id"
+              :label="f.feature_name"
+              :value="f.feature_id"
+            />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -74,6 +100,7 @@ const dialogTitle = ref('新增教室')
 const isEdit = ref(false)
 const submitting = ref(false)
 const formRef = ref(null)
+const featureOptions = ref([])
 
 const form = ref({
   classroom_id: '',
@@ -92,6 +119,11 @@ const rules = {
   capacity: [{ required: true, message: '请输入容量', trigger: 'blur' }]
 }
 
+function featureLabel(fid) {
+  const f = featureOptions.value.find(o => o.feature_id === fid)
+  return f ? f.feature_name : fid
+}
+
 const loadData = async () => {
   loading.value = true
   try {
@@ -99,6 +131,10 @@ const loadData = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const loadFeatures = async () => {
+  featureOptions.value = await classroomApi.getFeatures()
 }
 
 const handleAdd = () => {
@@ -111,7 +147,7 @@ const handleAdd = () => {
 const handleEdit = (row) => {
   isEdit.value = true
   dialogTitle.value = '编辑教室'
-  form.value = { ...row }
+  form.value = { ...row, features: [...(row.features || [])] }
   dialogVisible.value = true
 }
 
@@ -146,11 +182,13 @@ const handleDelete = async (row) => {
   }
 }
 
-onMounted(() => loadData())
+onMounted(() => {
+  loadData()
+  loadFeatures()
+})
 </script>
 
 <style scoped>
 .page-container { width: 100%; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 </style>
-

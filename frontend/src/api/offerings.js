@@ -45,6 +45,15 @@ export const offeringApi = {
   
   deletePreference(preferenceId) {
     return request.delete(`/offerings/preferences/${preferenceId}`)
+  },
+
+  // 自定义周次
+  getWeeks(offeringId) {
+    return request.get(`/offerings/${offeringId}/weeks`)
+  },
+
+  setWeeks(offeringId, weeks) {
+    return request.put(`/offerings/${offeringId}/weeks`, weeks)
   }
 }
 

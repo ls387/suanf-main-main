@@ -359,3 +359,40 @@ async def delete_preference(preference_id: int, db: Database = Depends(get_db)):
     
     return {"message": "删除成功", "preference_id": preference_id}
 
+
+# 开课计划自定义周次管理
+@router.get("/{offering_id}/weeks", response_model=List[int])
+async def get_offering_weeks(offering_id: int, db: Database = Depends(get_db)):
+    """获取开课计划的自定义周次列表"""
+    check = db.execute_query(
+        "SELECT offering_id FROM course_offerings WHERE offering_id = %s", (offering_id,)
+    )
+    if not check:
+        raise HTTPException(status_code=404, detail="开课计划不存在")
+    rows = db.execute_query(
+        "SELECT week_number FROM offering_weeks WHERE offering_id = %s ORDER BY week_number",
+        (offering_id,),
+    )
+    return [r["week_number"] for r in rows]
+
+
+@router.put("/{offering_id}/weeks", response_model=List[int])
+async def set_offering_weeks(offering_id: int, weeks: List[int], db: Database = Depends(get_db)):
+    """设置开课计划的自定义周次（全量替换）"""
+    check = db.execute_query(
+        "SELECT offering_id FROM course_offerings WHERE offering_id = %s", (offering_id,)
+    )
+    if not check:
+        raise HTTPException(status_code=404, detail="开课计划不存在")
+    db.execute_delete("DELETE FROM offering_weeks WHERE offering_id = %s", (offering_id,))
+    for w in sorted(set(weeks)):
+        if 1 <= w <= 53:
+            db.execute_insert(
+                "INSERT INTO offering_weeks (offering_id, week_number) VALUES (%s, %s)",
+                (offering_id, w),
+            )
+    rows = db.execute_query(
+        "SELECT week_number FROM offering_weeks WHERE offering_id = %s ORDER BY week_number",
+        (offering_id,),
+    )
+    return [r["week_number"] for r in rows]

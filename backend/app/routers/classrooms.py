@@ -34,6 +34,14 @@ async def get_classrooms(db: Database = Depends(get_db)):
     return classrooms
 
 
+@router.get("/features", response_model=List[dict])
+async def get_all_features(db: Database = Depends(get_db)):
+    """获取所有可用教室设施类型"""
+    return db.execute_query(
+        "SELECT feature_id, feature_name FROM classroom_features ORDER BY feature_id"
+    )
+
+
 @router.get("/{classroom_id}", response_model=Classroom)
 async def get_classroom(classroom_id: str, db: Database = Depends(get_db)):
     """获取单个教室"""

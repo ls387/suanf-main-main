@@ -12,7 +12,7 @@
 注：schedule_versions 表 status 枚举为 draft / published / archived
 """
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -42,6 +42,7 @@ class VersionResponse(BaseModel):
     status: str
     description: Optional[str]
     created_by: Optional[str]
+    parent_version_id: Optional[int]
     created_at: Optional[str]
     updated_at: Optional[str]
 
@@ -63,6 +64,7 @@ def _row_to_version(row: dict) -> dict:
         "status": row["status"],
         "description": row.get("description"),
         "created_by": row.get("created_by"),
+        "parent_version_id": row.get("parent_version_id"),
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
         "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
     }
@@ -229,3 +231,140 @@ async def delete_version(version_id: int):
 
     # 204 No Content，不返回 body
     return None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/versions/{id}/fork — Fork 版本（复制排课结果到新草稿）
+# ---------------------------------------------------------------------------
+
+class ForkVersionRequest(BaseModel):
+    version_name: str = Field(..., description="新版本名称")
+    description: Optional[str] = Field(None, description="新版本描述")
+
+
+@router.post("/{version_id}/fork", response_model=VersionResponse, status_code=201)
+async def fork_version(version_id: int, body: ForkVersionRequest):
+    """
+    基于一个已发布（published）版本复制排课结果，生成新草稿。
+
+    新版本的 parent_version_id 指向源版本，便于追溯。
+    """
+    db = get_db()
+    row = _get_version_or_404(db, version_id)
+
+    if row["status"] != "published":
+        raise HTTPException(
+            status_code=400,
+            detail=f"只能从已发布版本 fork，当前状态为 {row['status']}",
+        )
+
+    # 创建新版本
+    try:
+        new_id = db.execute_insert(
+            """INSERT INTO schedule_versions
+               (semester, version_name, description, created_by, parent_version_id)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (row["semester"], body.version_name, body.description,
+             row.get("created_by"), version_id),
+        )
+    except Exception as e:
+        if "Duplicate entry" in str(e):
+            raise HTTPException(
+                status_code=409,
+                detail=f"学期 {row['semester']} 下已存在同名版本 '{body.version_name}'",
+            )
+        logger.error(f"fork 版本失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="fork 版本失败")
+
+    # 批量复制 schedules（排除 schedule_id 和 created_at，让数据库自动生成）
+    db.execute_insert(
+        """INSERT INTO schedules (version_id, task_id, classroom_id, week_day, start_slot, end_slot)
+           SELECT %s, task_id, classroom_id, week_day, start_slot, end_slot
+           FROM schedules WHERE version_id = %s""",
+        (new_id, version_id),
+    )
+
+    new_row = _get_version_or_404(db, new_id)
+    return _row_to_version(new_row)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/versions/{id}/schedules — 获取版本完整排课列表（供拖拽 UI 用）
+# ---------------------------------------------------------------------------
+
+class ScheduleEntry(BaseModel):
+    """拖拽调课用的排课条目（含 schedule_id）"""
+    schedule_id: int
+    weekday: int
+    start_slot: int
+    end_slot: int
+    course_id: str
+    course_name: str
+    teacher_id: str
+    teacher_name: str
+    classroom_id: str
+    classroom_name: str
+    building_name: Optional[str]
+    campus_id: str
+    classes: List[str] = []
+
+
+@router.get("/{version_id}/schedules", response_model=List[ScheduleEntry])
+async def get_version_schedules(version_id: int):
+    """
+    返回该版本所有排课条目，字段完整展开。
+    含 schedule_id，供前端拖拽调课时标识每条记录。
+    """
+    db = get_db()
+    _get_version_or_404(db, version_id)
+
+    rows = db.execute_query(
+        """SELECT
+               s.schedule_id,
+               s.week_day   AS weekday,
+               s.start_slot,
+               s.end_slot,
+               s.task_id,
+               co.course_id,
+               co.course_nature,
+               c.course_name,
+               t.teacher_id,
+               t.teacher_name,
+               cr.classroom_id,
+               cr.classroom_name,
+               cr.building_name,
+               cr.campus_id
+           FROM schedules s
+           JOIN teaching_tasks tt  ON s.task_id      = tt.task_id
+           JOIN course_offerings co ON tt.offering_id = co.offering_id
+           JOIN courses c           ON co.course_id   = c.course_id
+           JOIN offering_teachers ot ON co.offering_id = ot.offering_id
+           JOIN teachers t          ON ot.teacher_id  = t.teacher_id
+           JOIN classrooms cr       ON s.classroom_id = cr.classroom_id
+           WHERE s.version_id = %s
+           ORDER BY s.week_day, s.start_slot""",
+        (version_id,),
+    )
+
+    # 按 schedule_id 去重（多教师场景可能重复），取第一条
+    seen: set = set()
+    deduped = []
+    for r in rows:
+        if r["schedule_id"] not in seen:
+            seen.add(r["schedule_id"])
+            deduped.append(r)
+
+    # 补充班级信息
+    for entry in deduped:
+        cls_rows = db.execute_query(
+            """SELECT cl.class_name
+               FROM offering_classes oc
+               JOIN classes cl ON oc.class_id = cl.class_id
+               WHERE oc.offering_id = (
+                   SELECT offering_id FROM teaching_tasks WHERE task_id = %s
+               )""",
+            (entry["task_id"],),
+        )
+        entry["classes"] = [r["class_name"] for r in cls_rows]
+
+    return deduped

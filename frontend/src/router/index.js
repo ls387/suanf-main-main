@@ -82,6 +82,18 @@ const router = createRouter({
           component: () => import('@/views/scheduling/ConflictReport.vue'),
           meta: { title: '冲突分析报告' }
         },
+        {
+          path: 'scheduling/drag',
+          name: 'DragSchedule',
+          component: () => import('@/views/scheduling/DragSchedule.vue'),
+          meta: { title: '手动调课' }
+        },
+        {
+          path: 'scheduling/drag/:versionId',
+          name: 'DragScheduleEdit',
+          component: () => import('@/views/scheduling/DragSchedule.vue'),
+          meta: { title: '手动调课' }
+        },
         // 课表查询
         {
           path: 'timetable/teacher',

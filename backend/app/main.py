@@ -19,6 +19,7 @@ from app.routers import (
     versions,
     conflicts,
     chat,
+    schedules,
 )
 from app.services.chat.chat_db import chat_db
 
@@ -70,6 +71,7 @@ app.include_router(timetables.router, prefix="/api/timetable", tags=["课表查�
 app.include_router(versions.router, prefix="/api/versions", tags=["版本管理"])
 app.include_router(conflicts.router, prefix="/api/conflicts", tags=["冲突检测"])
 app.include_router(chat.router, prefix="/api/chat", tags=["AI 助手"])
+app.include_router(schedules.router, prefix="/api/schedules", tags=["排课条目"])
 
 
 @app.get("/")
