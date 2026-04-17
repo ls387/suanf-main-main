@@ -6,8 +6,9 @@
 import sys
 import os
 import time
+import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Callable
 
 # 添加项目根目录到路径，以便导入现有的算法模块
 sys.path.append(
@@ -44,12 +45,18 @@ class SchedulingService:
         if self.db_connector:
             self.db_connector.disconnect()
 
-    def run_scheduling(self, version_id: int, ga_config: Dict) -> Dict:
-        """运行排课算法
+    def run_scheduling(
+        self,
+        version_id: int,
+        ga_config: Dict,
+        progress_callback: Optional[Callable[[Dict], None]] = None,
+    ) -> Dict:
+        """运行排课算法（同步，阻塞）
 
         Args:
             version_id: 排课版本ID
             ga_config: 遗传算法配置
+            progress_callback: 进度回调，接收 dict，格式见 genetic_algorithm.py _notify()
 
         Returns:
             排课结果字典
@@ -95,9 +102,9 @@ class SchedulingService:
             # 初始化遗传算法
             ga = SchedulingGeneticAlgorithm(data, ga_config)
 
-            # 运行算法
+            # 运行算法，透传进度回调
             logger.info("开始运行遗传算法")
-            best_solution = ga.evolve()
+            best_solution = ga.evolve(progress_callback=progress_callback)
 
             # 保存结果
             logger.info("保存排课结果")
@@ -147,6 +154,41 @@ class SchedulingService:
             }
         finally:
             self.cleanup()
+
+    async def run_scheduling_async(
+        self,
+        version_id: int,
+        ga_config: Dict,
+        progress_callback: Optional[Callable[[Dict], None]] = None,
+    ) -> Dict:
+        """异步运行排课算法
+
+        把阻塞的 run_scheduling() 丢进线程池，不阻塞 asyncio 事件循环。
+
+        进度回调注意事项：
+          progress_callback 在 worker 线程中被调用。
+          如果回调内部需要 await（如向 WebSocket 发消息），必须用
+          loop.call_soon_threadsafe() 来调度，不能直接 await。
+          推荐做法：在 routers 层构造一个线程安全的 callback，
+          内部使用 asyncio.Queue 或 call_soon_threadsafe 与主循环通信。
+
+        Args:
+            version_id: 排课版本ID
+            ga_config: 遗传算法配置
+            progress_callback: 线程安全的进度回调（同步函数）
+
+        Returns:
+            排课结果字典
+        """
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,  # 使用默认线程池（ThreadPoolExecutor）
+            self.run_scheduling,
+            version_id,
+            ga_config,
+            progress_callback,
+        )
+        return result
 
     def _check_conflicts(self, solution, task_dict, data) -> Dict:
         """检查冲突"""

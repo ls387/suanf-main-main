@@ -77,6 +77,21 @@ class DatabaseConnector:
             self.connection.rollback()
             raise
 
+    def execute_write(self, query: str, params: tuple = None) -> int:
+        """执行写操作（UPDATE / DELETE），返回影响行数"""
+        if not self.connection:
+            self.connect()
+
+        try:
+            with self.connection.cursor() as cursor:
+                affected = cursor.execute(query, params)
+                self.connection.commit()
+                return affected
+        except Exception as e:
+            logger.error(f"写操作执行失败: {query}, 错误: {e}")
+            self.connection.rollback()
+            raise
+
     def execute_batch_insert(self, query: str, params_list: List[tuple]):
         """批量插入"""
         if not self.connection:
@@ -485,7 +500,8 @@ class DataLoader:
 
         # 先删除该版本的现有结果
         delete_query = "DELETE FROM schedules WHERE version_id = %s"
-        self.db.execute_query(delete_query, (version_id,))
+        deleted = self.db.execute_write(delete_query, (version_id,))
+        logger.info(f"已删除版本 {version_id} 的 {deleted} 条旧排课记录")
 
         # 批量插入新结果
         insert_query = """

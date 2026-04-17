@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     # CORS 配置
     CORS_ORIGINS: list = ["http://localhost:5173", "http://localhost:3000"]
 
+    # AI 助手 LLM 配置（OpenAI 兼容接口）
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    LLM_MODEL: str = "qwen-max"
+    SQL_TIMEOUT: int = 10
+    MAX_SESSION_HISTORY: int = 5
+
     class Config:
         env_file = ".env"
         case_sensitive = True

@@ -25,7 +25,11 @@ class SchedulingGeneticAlgorithm:
         base_config = self._default_config()
         if config:
             for key, value in config.items():
-                base_config[key] = value
+                if key == "penalty_scores" and isinstance(value, dict):
+                    # 深合并：只覆盖传入的键，其余保留默认值
+                    base_config["penalty_scores"].update(value)
+                else:
+                    base_config[key] = value
         self.config = base_config
 
         # 预处理数据
@@ -1458,30 +1462,68 @@ class SchedulingGeneticAlgorithm:
         best_idx = max(tournament_indices, key=lambda i: fitness_scores[i])
         return population[best_idx][:]
 
-    def evolve(self) -> List[Gene]:
-        """进化主循环"""
+    def evolve(self, progress_callback=None) -> List[Gene]:
+        """进化主循环
+
+        Args:
+            progress_callback: 可选的进度回调函数，签名为 callback(event: dict)。
+                event 字段：
+                  - stage:     'init' | 'evolving' | 'done'
+                  - percent:   0-100 整数，整体进度
+                  - generation: 当前代数（evolving 阶段有效）
+                  - total_generations: 总代数
+                  - best_fitness: 当前最佳适应度
+                  - message:   人类可读的状态描述
+        """
         logger.info("开始遗传算法进化")
 
+        total_generations = self.config["generations"]
+        population_size = self.config["population_size"]
+
+        # 合并 config 里的旧式回调（向后兼容）
+        if progress_callback is None:
+            progress_callback = self.config.get("progress_callback", None)
+
+        def _notify(stage: str, percent: int, generation: int = 0,
+                    best_fitness: float = 0.0, message: str = ""):
+            """内部统一推送，吞掉回调异常避免影响算法"""
+            if progress_callback is None:
+                return
+            try:
+                progress_callback({
+                    "stage": stage,
+                    "percent": percent,
+                    "generation": generation,
+                    "total_generations": total_generations,
+                    "best_fitness": best_fitness,
+                    "message": message,
+                })
+            except Exception as e:
+                logger.warning(f"进度回调执行失败: {e}")
+
         logger.info(
-            f"正在初始化种群 (规模: {self.config['population_size']})，这可能需要一些时间..."
+            f"正在初始化种群 (规模: {population_size})，这可能需要一些时间..."
         )
 
-        # 初始化种群（带进度日志）
+        # 初始化种群（带进度日志 + 回调）
         population = []
-        for i in range(self.config["population_size"]):
+        for i in range(population_size):
             if i > 0 and i % 10 == 0:
-                logger.info(f"已初始化 {i}/{self.config['population_size']} 个个体...")
+                logger.info(f"已初始化 {i}/{population_size} 个个体...")
             population.append(self.create_individual())
+            # 初始化阶段占总进度的 10%
+            if i % max(1, population_size // 10) == 0:
+                init_percent = int(i / population_size * 10)
+                _notify("init", init_percent,
+                        message=f"正在初始化种群 {i}/{population_size}")
 
         logger.info("种群初始化完成！")
+        _notify("init", 10, message="种群初始化完成，开始进化")
 
         best_fitness = float("-inf")
         stagnation_count = 0
 
-        # 获取进度回调函数（如果有）
-        progress_callback = self.config.get("progress_callback", None)
-
-        for generation in range(self.config["generations"]):
+        for generation in range(total_generations):
             # 计算适应度
             fitness_scores = [self.fitness(individual) for individual in population]
 
@@ -1498,18 +1540,19 @@ class SchedulingGeneticAlgorithm:
             else:
                 stagnation_count += 1
 
-            # 调用进度回调（如果有）
-            if progress_callback:
-                try:
-                    progress_callback(
-                        generation, best_fitness, avg_fitness, stagnation_count
-                    )
-                except Exception as e:
-                    logger.warning(f"进度回调执行失败: {e}")
+            # 进化阶段占总进度的 10%-95%，每5代推送一次
+            if generation % 5 == 0:
+                evolve_percent = 10 + int(generation / total_generations * 85)
+                _notify("evolving", evolve_percent, generation=generation,
+                        best_fitness=best_fitness,
+                        message=f"第 {generation}/{total_generations} 代，最佳适应度: {best_fitness:.0f}")
 
             # 检查停滞
             if stagnation_count >= self.config["max_stagnation"]:
                 logger.info(f"算法停滞 {stagnation_count} 代，提前结束")
+                _notify("evolving", 95, generation=generation,
+                        best_fitness=best_fitness,
+                        message=f"算法收敛，第 {generation} 代提前结束")
                 break
 
             # 精英保留
@@ -1551,6 +1594,11 @@ class SchedulingGeneticAlgorithm:
         # 后处理：专门针对班级冲突的修复
         best_solution = population[best_idx]
         best_solution = self._post_process_class_conflicts(best_solution)
+
+        _notify("done", 100,
+                generation=total_generations,
+                best_fitness=final_fitness_scores[best_idx],
+                message=f"排课完成，最终适应度: {final_fitness_scores[best_idx]:.0f}")
 
         return best_solution
 

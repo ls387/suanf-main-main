@@ -57,11 +57,15 @@
       </el-main>
     </el-container>
   </el-container>
+
+  <!-- 全局 AI 助手悬浮组件 -->
+  <ChatAssistant />
 </template>
 
 <script setup>
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import ChatAssistant from '@/components/ChatAssistant.vue'
 
 const route = useRoute()
 

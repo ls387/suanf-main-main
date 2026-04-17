@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(not exist *)",
+      "Bash(git -C \"c:\\\\Users\\\\afrangry\\\\PycharmProjects\\\\suanf-main-main\" status --short)",
+      "Bash(git -C \"c:\\\\Users\\\\afrangry\\\\PycharmProjects\\\\suanf-main-main\" ls-files \"backend/app/routers/*\")"
+    ]
+  }
+}

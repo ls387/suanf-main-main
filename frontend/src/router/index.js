@@ -56,7 +56,31 @@ const router = createRouter({
           path: 'scheduling',
           name: 'Scheduling',
           component: () => import('@/views/scheduling/Scheduling.vue'),
-          meta: { title: '排课控制台' }
+          meta: { title: '排课控制台（旧）' }
+        },
+        {
+          path: 'scheduling/create',
+          name: 'VersionCreate',
+          component: () => import('@/views/scheduling/VersionCreate.vue'),
+          meta: { title: '新建排课版本' }
+        },
+        {
+          path: 'scheduling/progress/:versionId',
+          name: 'SchedulingProgress',
+          component: () => import('@/views/scheduling/SchedulingProgress.vue'),
+          meta: { title: '排课进度' }
+        },
+        {
+          path: 'scheduling/versions',
+          name: 'VersionList',
+          component: () => import('@/views/scheduling/VersionList.vue'),
+          meta: { title: '排课版本列表' }
+        },
+        {
+          path: 'scheduling/conflicts/:versionId',
+          name: 'ConflictReport',
+          component: () => import('@/views/scheduling/ConflictReport.vue'),
+          meta: { title: '冲突分析报告' }
         },
         // 课表查询
         {
