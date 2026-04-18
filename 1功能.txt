@@ -1,0 +1,19 @@
+teacher_conflict: 教师时间冲突
+        - class_conflict: 班级时间冲突
+        - classroom_conflict: 教室时间冲突
+        - capacity_violation: 教室容量不足
+        - blackout_violation: 教师黑名单时间上课
+        - feature_violation: 教室不满足课程必须的设施
+        - thursday_afternoon: 周四下午（第6-10节）禁止排课，晚上（第11-13节）允许
+        - campus_commute: 同一教师一天跨多个校区上课
+
+        软约束（违反会按权重扣分，用来“引导”更优方案）：
+        - teacher_preference: 未满足教师偏好时间段
+        - classroom_continuity: 连续课程未在同一教室
+        - utilization_waste: 教室容量浪费（教室太大、学生太少）
+        - student_overload: 单个班级某天课时数过多
+        - task_relation: 任务关系约束（同一课程不同任务次的时间关系）
+        - required_night_penalty: 必修/通识课安排在晚上 11-13 节
+        - required_weekend_penalty: 必修/通识课安排在周末下午（叠加在 weekend_penalty 之上）
+        - elective_prime_time_penalty: 选修课占用“黄金时段”（上午和下午前半段）
+        - weekend_penalty: 任何课程安排在周六/周日的基础惩罚

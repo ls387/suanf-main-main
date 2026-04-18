@@ -78,10 +78,10 @@ class SchedulingGeneticAlgorithm:
                 "class_conflict": -80000,  # 最高优先级：班级冲突必须完全避免
                 "classroom_conflict": -50000,  # 大幅提高：教室冲突必须避免
                 "capacity_violation": -60000,  # 极高惩罚：教室容量不足是硬性约束，必须严格避免
-                "blackout_violation": -8000,  # 提高：必须尊重教师禁用时间
-                "feature_violation": -8000,  # 提高：必须满足设施要求
-                "thursday_afternoon": -3000,  # 周四下午软约束
-                "campus_commute": -5000,  # 校区通勤保持硬约束
+                "blackout_violation": -80000,  # 提高：必须尊重教师禁用时间
+                "feature_violation": -80000,  # 提高：必须满足设施要求
+                "thursday_afternoon": -80000,  # 周四下午软约束
+                "campus_commute": -50000,  # 校区通勤保持硬约束
                 "teacher_preference": 100,  # 适度调整：平衡教师偏好
                 "classroom_continuity": 300,  # 大幅提高：强烈鼓励同教室连续上课
                 "utilization_waste": 200,  # 大幅提高：强制提高教室利用率
