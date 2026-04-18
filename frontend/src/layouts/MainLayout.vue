@@ -27,9 +27,9 @@
           <el-menu-item index="/preferences">教师偏好</el-menu-item>
         </el-sub-menu>
         
-        <el-menu-item index="/scheduling">
+        <el-menu-item index="/scheduling/versions">
           <el-icon><Setting /></el-icon>
-          <span>排课控制台</span>
+          <span>排课版本</span>
         </el-menu-item>
         
         <el-sub-menu index="timetable">
@@ -69,7 +69,13 @@ import ChatAssistant from '@/components/ChatAssistant.vue'
 
 const route = useRoute()
 
-const activeMenu = computed(() => route.path)
+const activeMenu = computed(() => {
+  if (route.path.startsWith('/scheduling')) {
+    return '/scheduling/versions'
+  }
+
+  return route.path
+})
 const currentTitle = computed(() => route.meta.title || '首页')
 </script>
 
