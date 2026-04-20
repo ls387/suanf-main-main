@@ -21,3 +21,54 @@ suanf.py
 6.排课报告，覆盖率，硬冲突检查（教室，班级，教师，时间，容量），
 包含多个老师教一门课程的情况
 教室利用率，个性化要求满足情况分析，打印冲突详细信息
+
+这些数据相对稳定，通常一个学期内不会有大的变动。
+campuses (校区表)
+departments (院系表)
+majors (专业表)
+classes (行政班表)
+teachers (教师表)
+courses (课程目录表)
+classroom_features (教室设施表)
+classrooms (教室表)
+classroom_has_features (教室-设施关联表)
+B. 本学期的排课任务定义 (每个学期都需要重新准备)
+这是排课工作的核心，定义了“为谁、上什么课、由谁上、上几周”等。
+course_offerings (开课计划表): 排课的起点。必须定义本学期要开设的所有课程。
+offering_classes (行政班关联表): 明确每门课由哪些班级合班上。
+offering_teachers (授课教师团队表): 明确每门课由哪些老师教，以及他们负责的周次。
+offering_requires_features (设施要求表): 定义课程对教室硬件的特殊要求。
+teaching_tasks (教学任务次表): 算法排课的原子单位。必须将每个开课计划分解成每周需要排的具体“课次”。
+schedule_versions排课版本
+
+特别需求
+offering_weeks (周次详情表): 明确每门课具体在哪几周上。
+teaching_groups (教学班/小组表): 如果有分班需求，需要在这里定义好小组。
+teacher_blackout_times (教师禁止时间表): 定义了硬约束。
+teacher_preferences (教师偏好表): 定义了软约束。
+task_relation_constraints：决定两个课程间隔天数
+
+存储：schedules - 排课结果
+
+硬约束包括：
+        - 教师时间冲突（teacher_conflict）
+        - 班级时间冲突（class_conflict）
+        - 教室时间冲突（classroom_conflict）
+        - 教室容量不足（capacity_violation）
+        - 教室设施不满足必需特征（feature_violation）
+        - 教师黑名单时间上课（blackout_violation）
+        - 周四下午上课（thursday_afternoon）
+        - 教师一天跨多个校区上课（campus_commute）
+
+
+        对应的软约束包括：
+        - 教师时间偏好（_check_teacher_preferences）
+        - 连续课程是否在同一教室（_check_classroom_continuity）
+        - 教室容量利用率（_check_utilization_waste）
+        - 学生每日课时负荷（_check_student_overload）
+        - 课程时段偏好与周末惩罚（_check_course_time_preference）
+
+        支持三种约束类型：
+        1. same_day: 要求两个任务必须在同一天
+        2. different_day: 避免两个任务在连续的两天
+        3. time_gap: 任务之间至少间隔N天

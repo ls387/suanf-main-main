@@ -172,17 +172,21 @@ class SchedulingSystem:
             logger.info("初始化遗传算法")
 
             # 定义进度回调函数
-            def progress_callback(generation, best_fitness, avg_fitness, stagnation):
-                """进度回调：每10代输出一次"""
-                if (
+            def progress_callback(event: dict):
+                """进度回调：接收事件字典"""
+                stage = event.get("stage", "")
+                generation = event.get("generation", 0)
+                total_generations = event.get("total_generations", ga_config.get("generations", 200))
+                best_fitness = event.get("best_fitness", 0.0)
+                percent = event.get("percent", 0)
+                
+                if stage == "evolving" and (
                     generation % 10 == 0
-                    or generation == ga_config.get("generations", 200) - 1
+                    or generation == total_generations - 1
                 ):
                     logger.info(
-                        f"[进化进度] 第 {generation}/{ga_config.get('generations', 200)} 代 | "
-                        f"最佳适应度: {best_fitness:.2f} | "
-                        f"平均适应度: {avg_fitness:.2f} | "
-                        f"停滞代数: {stagnation}"
+                        f"[进化进度] {percent}% | 第 {generation}/{total_generations} 代 | "
+                        f"最佳适应度: {best_fitness:.2f}"
                     )
 
             # 将回调函数添加到配置
