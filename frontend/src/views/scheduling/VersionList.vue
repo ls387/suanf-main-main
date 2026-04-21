@@ -111,7 +111,7 @@
 
             <el-popconfirm
               v-if="row.status === 'draft'"
-              :title="`确认删除版本 "${row.version_name}"？`"
+              :title="`确认删除版本「${row.version_name}」？`"
               confirm-button-text="删除"
               cancel-button-text="取消"
               confirm-button-type="danger"
