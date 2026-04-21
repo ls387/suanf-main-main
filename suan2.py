@@ -176,13 +176,14 @@ class SchedulingSystem:
                 """进度回调：接收事件字典"""
                 stage = event.get("stage", "")
                 generation = event.get("generation", 0)
-                total_generations = event.get("total_generations", ga_config.get("generations", 200))
+                total_generations = event.get(
+                    "total_generations", ga_config.get("generations", 200)
+                )
                 best_fitness = event.get("best_fitness", 0.0)
                 percent = event.get("percent", 0)
-                
+
                 if stage == "evolving" and (
-                    generation % 10 == 0
-                    or generation == total_generations - 1
+                    generation % 10 == 0 or generation == total_generations - 1
                 ):
                     logger.info(
                         f"[进化进度] {percent}% | 第 {generation}/{total_generations} 代 | "
@@ -241,11 +242,21 @@ class SchedulingSystem:
         # 检查容量冲突（硬约束）
         capacity_violations = self._check_capacity_violations(solution, task_dict, data)
 
+        # 检查其他硬约束（周末、跨校区、禁排时间、设施、黑名单）
+        advanced_violations = self._check_advanced_hard_constraints(
+            solution, task_dict, data
+        )
+
         total_conflicts = (
             conflicts["teacher_count"]
             + conflicts["class_count"]
             + conflicts["classroom_count"]
             + len(capacity_violations)
+            + advanced_violations["weekend_count"]
+            + advanced_violations["campus_commute_count"]
+            + advanced_violations["thursday_afternoon_count"]
+            + advanced_violations["feature_violation_count"]
+            + advanced_violations["blackout_count"]
         )
 
         if total_conflicts == 0:
@@ -254,34 +265,83 @@ class SchedulingSystem:
             logger.warning(f"⚠ 发现 {total_conflicts} 处硬冲突:")
 
             if conflicts["teacher_count"] > 0:
-                logger.warning(f"  - 教师冲突: {conflicts['teacher_count']} 处")
+                logger.warning(f"  - 教师时间冲突: {conflicts['teacher_count']} 处")
                 self._print_conflict_details(conflicts["teacher_details"], "教师", data)
 
             if conflicts["class_count"] > 0:
-                logger.warning(f"  - 班级冲突: {conflicts['class_count']} 处")
+                logger.warning(f"  - 班级时间冲突: {conflicts['class_count']} 处")
                 self._print_conflict_details(conflicts["class_details"], "班级", data)
 
             if conflicts["classroom_count"] > 0:
-                logger.warning(f"  - 教室冲突: {conflicts['classroom_count']} 处")
+                logger.warning(f"  - 教室时间冲突: {conflicts['classroom_count']} 处")
                 self._print_conflict_details(
                     conflicts["classroom_details"], "教室", data
                 )
 
             if len(capacity_violations) > 0:
-                logger.warning(f"  - 容量不足冲突: {len(capacity_violations)} 处")
-                for i, item in enumerate(
-                    capacity_violations[: self.MAX_DISPLAY_VIOLATIONS], 1
-                ):
+                logger.warning(f"  - 教室容量不足: {len(capacity_violations)} 处")
+                for i, item in enumerate(capacity_violations, 1):
                     logger.warning(
                         f"    [{i}] {item['course']}: 教室 {item['classroom']} "
                         f"(容量{item['capacity']}) < 学生数{item['students']}, "
                         f"缺少 {item['shortage']} 个座位"
                     )
-                if len(capacity_violations) > self.MAX_DISPLAY_VIOLATIONS:
+
+            if advanced_violations["weekend_count"] > 0:
+                logger.warning(
+                    f"  - 周末排课违规: {advanced_violations['weekend_count']} 处"
+                )
+                for i, item in enumerate(advanced_violations["weekend_violations"], 1):
                     logger.warning(
-                        f"    ... 还有 "
-                        f"{len(capacity_violations) - self.MAX_DISPLAY_VIOLATIONS} "
-                        f"个容量不足问题"
+                        f"    [{i}] {item['course']}: {item['day_name']} "
+                        f"第{item['slot']}-{item['end_slot']}节, "
+                        f"教师: {item['teacher']}, 班级: {item['class']}"
+                    )
+
+            if advanced_violations["campus_commute_count"] > 0:
+                logger.warning(
+                    f"  - 教师跨校区冲突: {advanced_violations['campus_commute_count']} 人次"
+                )
+                for i, item in enumerate(
+                    advanced_violations["campus_commute_violations"], 1
+                ):
+                    logger.warning(
+                        f"    [{i}] 教师 {item['teacher']}, {item['day_name']}: "
+                        f"{','.join(item['campuses'])}"
+                    )
+
+            if advanced_violations["thursday_afternoon_count"] > 0:
+                logger.warning(
+                    f"  - 周四下午禁排(6-10节): "
+                    f"{advanced_violations['thursday_afternoon_count']} 处"
+                )
+                for i, item in enumerate(
+                    advanced_violations["thursday_afternoon_violations"], 1
+                ):
+                    logger.warning(
+                        f"    [{i}] {item['course']}: 周四 第{item['start_slot']}-"
+                        f"{item['end_slot']}节, 教师: {item['teacher']}, "
+                        f"班级: {item['class']}"
+                    )
+
+            if advanced_violations["feature_violation_count"] > 0:
+                logger.warning(
+                    f"  - 教室设施不符: {advanced_violations['feature_violation_count']} 处"
+                )
+                for i, item in enumerate(advanced_violations["feature_violations"], 1):
+                    logger.warning(
+                        f"    [{i}] {item['course']}: 需要设施 {','.join(item['required'])} "
+                        f"但教室 {item['classroom']} 无法提供"
+                    )
+
+            if advanced_violations["blackout_count"] > 0:
+                logger.warning(
+                    f"  - 教师黑名单时间违规: {advanced_violations['blackout_count']} 处"
+                )
+                for i, item in enumerate(advanced_violations["blackout_violations"], 1):
+                    logger.warning(
+                        f"    [{i}] 教师 {item['teacher']}, {item['day_name']} "
+                        f"第{item['slot']}节: {item['course']}"
                     )
 
         # 教室利用率统计
@@ -293,10 +353,10 @@ class SchedulingSystem:
     def _print_conflict_details(
         self, conflict_details: List[Dict], entity_type: str, data: Dict
     ):
-        """打印冲突详细信息"""
+        """打印冲突详细信息（显示所有冲突）"""
         day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
-        for i, conflict in enumerate(conflict_details[: self.MAX_DISPLAY_CONFLICTS], 1):
+        for i, conflict in enumerate(conflict_details, 1):
             entity_id = conflict["entity_id"]
             weekday = conflict["weekday"]
             slot = conflict["slot"]
@@ -326,11 +386,7 @@ class SchedulingSystem:
                     f"{task_info['start_slot']+task_info['slots_count']-1}节"
                 )
 
-        if len(conflict_details) > self.MAX_DISPLAY_CONFLICTS:
-            logger.warning(
-                f"    ... 还有 {len(conflict_details) - self.MAX_DISPLAY_CONFLICTS} "
-                f"处{entity_type}冲突未显示"
-            )
+        logger.warning(f"【共计 {len(conflict_details)} 处{entity_type}冲突】")
 
     def _check_conflicts(
         self, solution: List[Gene], task_dict: Dict, data: Dict
@@ -473,6 +529,192 @@ class SchedulingSystem:
                 )
 
         return capacity_violations
+
+    def _check_advanced_hard_constraints(
+        self, solution: List[Gene], task_dict: Dict, data: Dict
+    ) -> Dict:
+        """检查高级硬约束违规（周末、跨校区、禁排时间、设施、黑名单）"""
+        from collections import defaultdict
+
+        day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        violations = {
+            "weekend_violations": [],
+            "weekend_count": 0,
+            "campus_commute_violations": [],
+            "campus_commute_count": 0,
+            "thursday_afternoon_violations": [],
+            "thursday_afternoon_count": 0,
+            "feature_violations": [],
+            "feature_violation_count": 0,
+            "blackout_violations": [],
+            "blackout_count": 0,
+        }
+
+        # 1. 检查周末排课
+        for gene in solution:
+            task = task_dict.get(gene.task_id)
+            if not task:
+                continue
+
+            if gene.week_day in [6, 7]:  # 周六/周日
+                teacher_name = "未知"
+                if hasattr(gene, "teacher_id"):
+                    teacher_name = self._get_entity_name(gene.teacher_id, "教师", data)
+
+                violations["weekend_violations"].append(
+                    {
+                        "course": self._get_course_name(task, data),
+                        "day_name": day_names[gene.week_day],
+                        "slot": gene.start_slot,
+                        "end_slot": gene.start_slot + task.slots_count - 1,
+                        "teacher": teacher_name,
+                        "class": ", ".join(
+                            [
+                                self._get_entity_name(c, "班级", data)
+                                for c in task.classes
+                            ]
+                        ),
+                    }
+                )
+                violations["weekend_count"] += 1
+
+        # 2. 检查教师一天跨校区
+        teacher_daily_campuses = defaultdict(lambda: defaultdict(set))
+        for gene in solution:
+            task = task_dict.get(gene.task_id)
+            if not task:
+                continue
+            classroom = data["classrooms"].get(gene.classroom_id)
+            if not classroom:
+                continue
+
+            for teacher_id in task.teachers:
+                campus_id = getattr(classroom, "campus_id", None)
+                if campus_id:
+                    teacher_daily_campuses[teacher_id][gene.week_day].add(campus_id)
+
+        for teacher_id, daily_campuses in teacher_daily_campuses.items():
+            for weekday, campuses in daily_campuses.items():
+                if len(campuses) > 1:
+                    campus_names = []
+                    for campus_id in campuses:
+                        campus_names.append(str(campus_id))
+                    violations["campus_commute_violations"].append(
+                        {
+                            "teacher": self._get_entity_name(teacher_id, "教师", data),
+                            "day_name": day_names[weekday],
+                            "campuses": campus_names,
+                        }
+                    )
+                    violations["campus_commute_count"] += 1
+
+        # 3. 检查周四下午（6-10节）禁排
+        for gene in solution:
+            task = task_dict.get(gene.task_id)
+            if not task:
+                continue
+
+            if gene.week_day == 4 and 6 <= gene.start_slot <= 10:
+                teacher_name = "未知"
+                if hasattr(gene, "teacher_id"):
+                    teacher_name = self._get_entity_name(gene.teacher_id, "教师", data)
+
+                violations["thursday_afternoon_violations"].append(
+                    {
+                        "course": self._get_course_name(task, data),
+                        "start_slot": gene.start_slot,
+                        "end_slot": gene.start_slot + task.slots_count - 1,
+                        "teacher": teacher_name,
+                        "class": ", ".join(
+                            [
+                                self._get_entity_name(c, "班级", data)
+                                for c in task.classes
+                            ]
+                        ),
+                    }
+                )
+                violations["thursday_afternoon_count"] += 1
+
+        # 4. 检查教室设施不符
+        for gene in solution:
+            task = task_dict.get(gene.task_id)
+            if not task:
+                continue
+            classroom = data["classrooms"].get(gene.classroom_id)
+            if not classroom:
+                continue
+
+            classroom_features = getattr(classroom, "features", set())
+            if isinstance(classroom_features, set):
+                if not task.required_features.issubset(classroom_features):
+                    missing_features = task.required_features - classroom_features
+                    violations["feature_violations"].append(
+                        {
+                            "course": self._get_course_name(task, data),
+                            "classroom": classroom.classroom_name or gene.classroom_id,
+                            "required": list(missing_features),
+                        }
+                    )
+                    violations["feature_violation_count"] += 1
+
+        # 5. 检查教师黑名单时间
+        teacher_blackouts = data.get("teacher_blackout_times", [])
+        for gene in solution:
+            task = task_dict.get(gene.task_id)
+            if not task:
+                continue
+
+            for teacher_id in task.teachers:
+                # 检查课程是否在黑名单时间内
+                for blackout in teacher_blackouts:
+                    # 黑名单时间可能是对象或字典，兼容两种形式
+                    blackout_teacher = (
+                        blackout.teacher_id
+                        if hasattr(blackout, "teacher_id")
+                        else blackout.get("teacher_id")
+                    )
+                    blackout_weekday = (
+                        blackout.weekday
+                        if hasattr(blackout, "weekday")
+                        else blackout.get("weekday")
+                    )
+                    blackout_start = (
+                        blackout.start_slot
+                        if hasattr(blackout, "start_slot")
+                        else blackout.get("start_slot")
+                    )
+                    blackout_end = (
+                        blackout.end_slot
+                        if hasattr(blackout, "end_slot")
+                        else blackout.get("end_slot")
+                    )
+
+                    if (
+                        blackout_teacher == teacher_id
+                        and blackout_weekday == gene.week_day
+                    ):
+                        # 检查课程是否与黑名单时间重叠
+                        course_slots = set(
+                            range(gene.start_slot, gene.start_slot + task.slots_count)
+                        )
+                        blackout_slots = set(range(blackout_start, blackout_end + 1))
+                        if course_slots & blackout_slots:  # 有重叠
+                            overlapping_slots = course_slots & blackout_slots
+                            for slot in sorted(overlapping_slots):
+                                violations["blackout_violations"].append(
+                                    {
+                                        "teacher": self._get_entity_name(
+                                            teacher_id, "教师", data
+                                        ),
+                                        "day_name": day_names[gene.week_day],
+                                        "slot": slot,
+                                        "course": self._get_course_name(task, data),
+                                    }
+                                )
+                                violations["blackout_count"] += 1
+                            break
+
+        return violations
 
     def _analyze_classroom_utilization(
         self, solution: List[Gene], task_dict: Dict, data: Dict

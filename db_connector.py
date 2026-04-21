@@ -429,7 +429,7 @@ class DataLoader:
 
             # 如果没有特殊设施要求，默认需要标准多媒体设备
             if not task.required_features:
-                task.required_features.add("MULTIMEDIA_STD")
+                task.required_features.add("DMT")
 
             # 填充学生人数
             if task.group_id and task.group_id in data["teaching_groups"]:
