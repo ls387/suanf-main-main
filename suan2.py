@@ -17,6 +17,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from db_connector import DatabaseConnector, DataLoader
 from genetic_algorithm import SchedulingGeneticAlgorithm
 from data_models import Gene, ScheduleVersion
+from hard_constraint_checker import (
+    check_all_hard_constraints,
+    generate_hard_constraint_report,
+)
 
 # 配置日志
 logging.basicConfig(
@@ -208,7 +212,9 @@ class SchedulingSystem:
             )
 
             # 生成统计报告
-            self._generate_report(version_id, best_solution, ga.task_dict, data)
+            self._generate_report(
+                version_id, best_solution, ga.task_dict, data, ga.config
+            )
 
             end_time = time.time()
             logger.info(f"排课完成，总耗时: {end_time - start_time:.2f} 秒")
@@ -223,10 +229,18 @@ class SchedulingSystem:
             return False
 
     def _generate_report(
-        self, version_id: int, solution: List[Gene], task_dict: Dict, data: Dict
+        self,
+        version_id: int,
+        solution: List[Gene],
+        task_dict: Dict,
+        data: Dict,
+        config: Dict = None,
     ):
         """生成排课统计报告"""
         logger.info("生成排课统计报告")
+
+        if config is None:
+            config = {}
 
         total_tasks = len(data["teaching_tasks"])
         scheduled_tasks = len(solution)
@@ -236,113 +250,29 @@ class SchedulingSystem:
             f"排课覆盖率: {coverage_rate:.1f}% ({scheduled_tasks}/{total_tasks})"
         )
 
-        # 检查硬冲突
-        conflicts = self._check_conflicts(solution, task_dict, data)
+        # ============ 新增：完整硬约束检查系统 ============
+        logger.info("\n" + "=" * 70)
+        logger.info("执行完整硬约束检查")
+        logger.info("=" * 70)
 
-        # 检查容量冲突（硬约束）
-        capacity_violations = self._check_capacity_violations(solution, task_dict, data)
-
-        # 检查其他硬约束（周末、跨校区、禁排时间、设施、黑名单）
-        advanced_violations = self._check_advanced_hard_constraints(
-            solution, task_dict, data
+        violations, summary = check_all_hard_constraints(
+            solution, task_dict, data, config
         )
 
-        total_conflicts = (
-            conflicts["teacher_count"]
-            + conflicts["class_count"]
-            + conflicts["classroom_count"]
-            + len(capacity_violations)
-            + advanced_violations["weekend_count"]
-            + advanced_violations["campus_commute_count"]
-            + advanced_violations["thursday_afternoon_count"]
-            + advanced_violations["feature_violation_count"]
-            + advanced_violations["blackout_count"]
-        )
+        # 输出详细报告
+        report_text = generate_hard_constraint_report(violations, config, logger)
+        logger.info(report_text)
 
-        if total_conflicts == 0:
-            logger.info("✓ 没有发现硬冲突")
+        # 输出总体评估
+        total_violations = summary["total_violations"]
+        if total_violations == 0:
+            logger.info("✓ 优秀：没有发现任何硬约束违反！")
         else:
-            logger.warning(f"⚠ 发现 {total_conflicts} 处硬冲突:")
+            logger.warning(
+                f"⚠ 警告：发现 {total_violations} 处硬约束违反，总惩罚分数: {int(summary['penalty_score']):,}"
+            )
 
-            if conflicts["teacher_count"] > 0:
-                logger.warning(f"  - 教师时间冲突: {conflicts['teacher_count']} 处")
-                self._print_conflict_details(conflicts["teacher_details"], "教师", data)
-
-            if conflicts["class_count"] > 0:
-                logger.warning(f"  - 班级时间冲突: {conflicts['class_count']} 处")
-                self._print_conflict_details(conflicts["class_details"], "班级", data)
-
-            if conflicts["classroom_count"] > 0:
-                logger.warning(f"  - 教室时间冲突: {conflicts['classroom_count']} 处")
-                self._print_conflict_details(
-                    conflicts["classroom_details"], "教室", data
-                )
-
-            if len(capacity_violations) > 0:
-                logger.warning(f"  - 教室容量不足: {len(capacity_violations)} 处")
-                for i, item in enumerate(capacity_violations, 1):
-                    logger.warning(
-                        f"    [{i}] {item['course']}: 教室 {item['classroom']} "
-                        f"(容量{item['capacity']}) < 学生数{item['students']}, "
-                        f"缺少 {item['shortage']} 个座位"
-                    )
-
-            if advanced_violations["weekend_count"] > 0:
-                logger.warning(
-                    f"  - 周末排课违规: {advanced_violations['weekend_count']} 处"
-                )
-                for i, item in enumerate(advanced_violations["weekend_violations"], 1):
-                    logger.warning(
-                        f"    [{i}] {item['course']}: {item['day_name']} "
-                        f"第{item['slot']}-{item['end_slot']}节, "
-                        f"教师: {item['teacher']}, 班级: {item['class']}"
-                    )
-
-            if advanced_violations["campus_commute_count"] > 0:
-                logger.warning(
-                    f"  - 教师跨校区冲突: {advanced_violations['campus_commute_count']} 人次"
-                )
-                for i, item in enumerate(
-                    advanced_violations["campus_commute_violations"], 1
-                ):
-                    logger.warning(
-                        f"    [{i}] 教师 {item['teacher']}, {item['day_name']}: "
-                        f"{','.join(item['campuses'])}"
-                    )
-
-            if advanced_violations["thursday_afternoon_count"] > 0:
-                logger.warning(
-                    f"  - 周四下午禁排(6-10节): "
-                    f"{advanced_violations['thursday_afternoon_count']} 处"
-                )
-                for i, item in enumerate(
-                    advanced_violations["thursday_afternoon_violations"], 1
-                ):
-                    logger.warning(
-                        f"    [{i}] {item['course']}: 周四 第{item['start_slot']}-"
-                        f"{item['end_slot']}节, 教师: {item['teacher']}, "
-                        f"班级: {item['class']}"
-                    )
-
-            if advanced_violations["feature_violation_count"] > 0:
-                logger.warning(
-                    f"  - 教室设施不符: {advanced_violations['feature_violation_count']} 处"
-                )
-                for i, item in enumerate(advanced_violations["feature_violations"], 1):
-                    logger.warning(
-                        f"    [{i}] {item['course']}: 需要设施 {','.join(item['required'])} "
-                        f"但教室 {item['classroom']} 无法提供"
-                    )
-
-            if advanced_violations["blackout_count"] > 0:
-                logger.warning(
-                    f"  - 教师黑名单时间违规: {advanced_violations['blackout_count']} 处"
-                )
-                for i, item in enumerate(advanced_violations["blackout_violations"], 1):
-                    logger.warning(
-                        f"    [{i}] 教师 {item['teacher']}, {item['day_name']} "
-                        f"第{item['slot']}节: {item['course']}"
-                    )
+        # ============ 继续其他分析 ============
 
         # 教室利用率统计
         self._analyze_classroom_utilization(solution, task_dict, data)
