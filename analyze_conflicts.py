@@ -1310,6 +1310,13 @@ def optimize_conflicts(
             # 这种情况下，跳过该课程，让其他冲突课程调整
             if new_weekday is None:
                 print(f"  → 保留在原位，等待其他冲突课程调整")
+                # 记录原时间的占用，防止随后被其他调整的课程占据导致数据库写冲突
+                for slot in range(old_start_slot, old_start_slot + slots_count):
+                    occupied_times["classroom"][classroom_id].add((old_weekday, slot))
+                    for teacher_id in teacher_ids:
+                        occupied_times["teacher"][teacher_id].add((old_weekday, slot))
+                    for class_id in classes:
+                        occupied_times["class"][class_id].add((old_weekday, slot))
                 continue  # 更新占用记录
             for slot in range(new_start_slot, new_start_slot + slots_count):
                 occupied_times["classroom"][classroom_id].add((new_weekday, slot))
@@ -1370,6 +1377,14 @@ def optimize_conflicts(
                 )
                 print(f"   → 可能是教师或教室时间冲突导致无法调整")
 
+            # 无法调整即代表保留在原位，必须更新原时间的占用记录
+            for slot in range(old_start_slot, old_start_slot + slots_count):
+                occupied_times["classroom"][classroom_id].add((old_weekday, slot))
+                for teacher_id in teacher_ids:
+                    occupied_times["teacher"][teacher_id].add((old_weekday, slot))
+                for class_id in classes:
+                    occupied_times["class"][class_id].add((old_weekday, slot))
+
     if adjustments:
         print(f"\n找到 {len(adjustments)} 个调整方案:")
         day_names = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -1382,27 +1397,40 @@ def optimize_conflicts(
 
         confirm = input("\n确认应用这些调整? (y/n): ").strip().lower()
         if confirm == "y":
-            # 应用调整到数据库
-            for adj in adjustments:
-                update_query = """
-                UPDATE schedules 
-                SET week_day = %s, start_slot = %s, end_slot = %s
-                WHERE schedule_id = %s
-                """
-                cursor.execute(
-                    update_query,
-                    (
-                        adj["new_time"][0],
-                        adj["new_time"][1],
-                        adj["new_end_slot"],
-                        adj["schedule_id"],
-                    ),
-                )
+            # 应用调整到数据库，套用事务和中转状态防冲突
+            try:
+                # 步骤1：为避免错位调整中途撞车（UNIQUE KEY冲突），先临时挪出有效星期范围（+100）
+                for adj in adjustments:
+                    cursor.execute(
+                        "UPDATE schedules SET week_day = week_day + 100 WHERE schedule_id = %s",
+                        (adj["schedule_id"],),
+                    )
 
-            conn.commit()
-            print(
-                f"\n✓ 第二阶段完成：已成功调整 {len(adjustments)} 个课程安排，解决时间冲突"
-            )
+                # 步骤2：安全放置到新时间槽
+                for adj in adjustments:
+                    update_query = """
+                    UPDATE schedules 
+                    SET week_day = %s, start_slot = %s, end_slot = %s
+                    WHERE schedule_id = %s
+                    """
+                    cursor.execute(
+                        update_query,
+                        (
+                            adj["new_time"][0],
+                            adj["new_time"][1],
+                            adj["new_end_slot"],
+                            adj["schedule_id"],
+                        ),
+                    )
+
+                conn.commit()
+                print(
+                    f"\n✓ 第二阶段完成：已成功调整 {len(adjustments)} 个课程安排，解决时间冲突"
+                )
+            except Exception as e:
+                conn.rollback()
+                print(f"\n✗ 保存调整失败，数据库已回滚: {e}")
+                return
 
             # 第三阶段：优化容量利用率和个性化要求
             print("\n" + "=" * 80)
