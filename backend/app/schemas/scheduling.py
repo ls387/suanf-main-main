@@ -8,26 +8,60 @@ from typing import Optional, Dict
 
 class PenaltyScores(BaseModel):
     """约束权重配置（所有字段均可选，未传的使用算法默认值）"""
+
     # 硬约束罚分（负数，绝对值越大越严格）
-    teacher_conflict: Optional[int] = Field(None, description="教师时间冲突罚分，默认 -50000")
-    class_conflict: Optional[int] = Field(None, description="班级时间冲突罚分，默认 -80000（最高优先）")
-    classroom_conflict: Optional[int] = Field(None, description="教室时间冲突罚分，默认 -50000")
-    capacity_violation: Optional[int] = Field(None, description="教室容量不足罚分，默认 -60000")
-    blackout_violation: Optional[int] = Field(None, description="教师禁用时段罚分，默认 -8000")
-    feature_violation: Optional[int] = Field(None, description="设施不满足罚分，默认 -8000")
-    thursday_afternoon: Optional[int] = Field(None, description="周四下午排课罚分，默认 -3000")
-    campus_commute: Optional[int] = Field(None, description="教师跨校区通勤罚分，默认 -5000")
-    weekend_penalty: Optional[int] = Field(None, description="周末排课罚分，默认 -10000")
+    teacher_conflict: Optional[int] = Field(
+        None, description="教师时间冲突罚分，默认 -50000"
+    )
+    class_conflict: Optional[int] = Field(
+        None, description="班级时间冲突罚分，默认 -80000（最高优先）"
+    )
+    classroom_conflict: Optional[int] = Field(
+        None, description="教室时间冲突罚分，默认 -50000"
+    )
+    capacity_violation: Optional[int] = Field(
+        None, description="教室容量不足罚分，默认 -60000"
+    )
+    blackout_violation: Optional[int] = Field(
+        None, description="教师禁用时段罚分，默认 -8000"
+    )
+    feature_violation: Optional[int] = Field(
+        None, description="设施不满足罚分，默认 -8000"
+    )
+    thursday_afternoon: Optional[int] = Field(
+        None, description="周四下午排课罚分，默认 -3000"
+    )
+    campus_commute: Optional[int] = Field(
+        None, description="教师跨校区通勤罚分，默认 -5000"
+    )
+    weekend_penalty: Optional[int] = Field(
+        None, description="周末排课罚分，默认 -10000"
+    )
     # 软约束强度（正数，越大越严格）
-    teacher_preference: Optional[int] = Field(None, description="未满足教师偏好扣分强度，默认 100")
-    classroom_continuity: Optional[int] = Field(None, description="连续课不同教室扣分强度，默认 300")
-    utilization_waste: Optional[int] = Field(None, description="教室容量浪费扣分强度，默认 200")
-    daily_classroom_variety: Optional[int] = Field(None, description="同天多教室扣分强度，默认 300")
-    student_overload: Optional[int] = Field(None, description="学生课程过载扣分强度，默认 150")
-    task_relation: Optional[int] = Field(None, description="课程关系违反扣分强度，默认 300")
-    required_night_penalty: Optional[int] = Field(None, description="必修课安排晚上扣分强度，默认 400")
-    required_weekend_penalty: Optional[int] = Field(None, description="必修课安排周末扣分强度，默认 300")
-    elective_prime_time_penalty: Optional[int] = Field(None, description="选修课占黄金时段扣分强度，默认 30")
+    teacher_preference: Optional[int] = Field(
+        None, description="未满足教师偏好扣分强度，默认 100"
+    )
+    classroom_continuity: Optional[int] = Field(
+        None, description="连续课不同教室扣分强度，默认 300"
+    )
+    utilization_waste: Optional[int] = Field(
+        None, description="教室容量浪费扣分强度，默认 200"
+    )
+    daily_classroom_variety: Optional[int] = Field(
+        None, description="同天多教室扣分强度，默认 300"
+    )
+    student_overload: Optional[int] = Field(
+        None, description="学生课程过载扣分强度，默认 150"
+    )
+    task_relation: Optional[int] = Field(
+        None, description="课程关系违反扣分强度，默认 300"
+    )
+    required_night_penalty: Optional[int] = Field(
+        None, description="必修课安排晚上扣分强度，默认 400"
+    )
+    elective_prime_time_penalty: Optional[int] = Field(
+        None, description="选修课占黄金时段扣分强度，默认 30"
+    )
 
 
 class SchedulingRequest(BaseModel):

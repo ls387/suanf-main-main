@@ -254,7 +254,6 @@ const penalty = ref({
   student_overload: null,
   task_relation: null,
   required_night_penalty: null,
-  required_weekend_penalty: null,
   elective_prime_time_penalty: null,
 })
 
@@ -278,7 +277,6 @@ const softConstraints = [
   { key: 'student_overload',            label: '学生课程过载',   default: 150,  tip: '学生单日课时过多' },
   { key: 'task_relation',               label: '课程关系违反',   default: 300,  tip: '有前后依赖关系的课程排课顺序不当' },
   { key: 'required_night_penalty',      label: '必修课安排晚上', default: 400,  tip: '必修课被安排在晚上时段' },
-  { key: 'required_weekend_penalty',    label: '必修课安排周末', default: 300,  tip: '必修课被安排在周末' },
   { key: 'elective_prime_time_penalty', label: '选修占黄金时段', default: 30,   tip: '选修课占用上午/下午前半段黄金时间' },
 ]
 

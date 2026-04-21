@@ -60,7 +60,6 @@ class SchedulingGeneticAlgorithm:
         - student_overload: 单个班级某天课时数过多
         - task_relation: 任务关系约束（同一课程不同任务次的时间关系）
         - required_night_penalty: 必修/通识课安排在晚上 11-13 节
-        - required_weekend_penalty: 必修/通识课安排在周末下午（叠加在 weekend_penalty 之上）
         - elective_prime_time_penalty: 选修课占用“黄金时段”（上午和下午前半段）
         - weekend_penalty: 任何课程安排在周六/周日的基础惩罚
         """
@@ -89,7 +88,6 @@ class SchedulingGeneticAlgorithm:
                 "student_overload": 150,  # 适度调整：避免学生过载
                 "task_relation": 300,  # 保持：重视课程关系
                 "required_night_penalty": 400,  # 保持：必修课避免晚上
-                "required_weekend_penalty": 300,  # 保持：必修课避免周末
                 "elective_prime_time_penalty": 30,  # 保持：选修课灵活性
                 "weekend_penalty": -10000,  # 保持：禁止周末排课
             },
@@ -801,12 +799,19 @@ class SchedulingGeneticAlgorithm:
             (classroom_schedule, "classroom_conflict"),
         ]:
             for entity_id, time_list in schedule_dict.items():
-                if len(time_list) != len(set(time_list)):
-                    penalty += self.config["penalty_scores"][conflict_type]
+                conflict_count = len(time_list) - len(set(time_list))
+                if conflict_count > 0:
+                    penalty += (
+                        conflict_count * self.config["penalty_scores"][conflict_type]
+                    )
 
         # 检查其他硬约束：容量、设施、黑名单、周四下午、校区通勤
         for gene in individual:
             task = self.task_dict[gene.task_id]
+
+            # 【新增】周末禁排课硬约束
+            if gene.week_day in [6, 7]:
+                penalty += self.config["penalty_scores"]["weekend_penalty"]
 
             # 检查教室容量
             classroom = self.data["classrooms"][gene.classroom_id]
@@ -818,10 +823,11 @@ class SchedulingGeneticAlgorithm:
                 penalty += self.config["penalty_scores"]["feature_violation"]
 
             # 检查教师黑名单时间
-            if self._violates_teacher_blackout(
-                gene.teacher_id, gene.week_day, gene.start_slot, task.slots_count
-            ):
-                penalty += self.config["penalty_scores"]["blackout_violation"]
+            for t_id in task.teachers:
+                if self._violates_teacher_blackout(
+                    t_id, gene.week_day, gene.start_slot, task.slots_count
+                ):
+                    penalty += self.config["penalty_scores"]["blackout_violation"]
 
             # 检查周四下午限制（第6-10节不可排课，第11-13节晚上可以）
             if gene.week_day == 4 and 6 <= gene.start_slot <= 10:
@@ -831,6 +837,7 @@ class SchedulingGeneticAlgorithm:
         teacher_daily_campuses = defaultdict(lambda: defaultdict(set))
 
         for gene in individual:
+            task = self.task_dict[gene.task_id]
             classroom = self.data["classrooms"][gene.classroom_id]
             campus_id = classroom.campus_id
 
@@ -842,15 +849,16 @@ class SchedulingGeneticAlgorithm:
             else:
                 period = "evening"
 
-            teacher_daily_campuses[gene.teacher_id][gene.week_day].add(
-                (period, campus_id)
-            )
+            for t_id in task.teachers:
+                teacher_daily_campuses[t_id][gene.week_day].add((period, campus_id))
 
         for teacher_id, daily_campuses in teacher_daily_campuses.items():
             for weekday, period_campuses in daily_campuses.items():
                 campuses = {campus_id for _, campus_id in period_campuses}
                 if len(campuses) > 1:
-                    penalty += self.config["penalty_scores"]["campus_commute"]
+                    penalty += self.config["penalty_scores"]["campus_commute"] * (
+                        len(campuses) - 1
+                    )
 
         return penalty
 
@@ -905,33 +913,34 @@ class SchedulingGeneticAlgorithm:
 
         for gene in individual:
             task = self.task_dict[gene.task_id]
-            teacher_prefs = self.teacher_preferences.get(gene.teacher_id, {})
+            for t_id in task.teachers:
+                teacher_prefs = self.teacher_preferences.get(t_id, {})
 
-            # 检查避免时段
-            for (weekday, start_slot, end_slot), penalty_score in teacher_prefs.get(
-                "avoided", []
-            ):
-                if gene.week_day == weekday and not (
-                    gene.start_slot + task.slots_count <= start_slot
-                    or gene.start_slot >= end_slot + 1
+                # 检查避免时段
+                for (weekday, start_slot, end_slot), penalty_score in teacher_prefs.get(
+                    "avoided", []
                 ):
-                    penalty += penalty_score
+                    if gene.week_day == weekday and not (
+                        gene.start_slot + task.slots_count <= start_slot
+                        or gene.start_slot >= end_slot + 1
+                    ):
+                        penalty += penalty_score
 
-            # 检查偏好时段
-            in_preferred = False
-            for (weekday, start_slot, end_slot), penalty_score in teacher_prefs.get(
-                "preferred", []
-            ):
-                if (
-                    gene.week_day == weekday
-                    and gene.start_slot >= start_slot
-                    and gene.start_slot + task.slots_count <= end_slot + 1
+                # 检查偏好时段
+                in_preferred = False
+                for (weekday, start_slot, end_slot), penalty_score in teacher_prefs.get(
+                    "preferred", []
                 ):
-                    in_preferred = True
-                    break
+                    if (
+                        gene.week_day == weekday
+                        and gene.start_slot >= start_slot
+                        and gene.start_slot + task.slots_count <= end_slot + 1
+                    ):
+                        in_preferred = True
+                        break
 
-            if not in_preferred and teacher_prefs.get("preferred"):
-                penalty += self.config["penalty_scores"]["teacher_preference"]
+                if not in_preferred and teacher_prefs.get("preferred"):
+                    penalty += self.config["penalty_scores"]["teacher_preference"]
 
         return penalty
 
@@ -1011,6 +1020,7 @@ class SchedulingGeneticAlgorithm:
         teacher_daily_campuses = defaultdict(lambda: defaultdict(set))
 
         for gene in individual:
+            task = self.task_dict[gene.task_id]
             classroom = self.data["classrooms"][gene.classroom_id]
             campus_id = classroom.campus_id
 
@@ -1022,9 +1032,8 @@ class SchedulingGeneticAlgorithm:
             else:
                 period = "evening"
 
-            teacher_daily_campuses[gene.teacher_id][gene.week_day].add(
-                (period, campus_id)
-            )
+            for t_id in task.teachers:
+                teacher_daily_campuses[t_id][gene.week_day].add((period, campus_id))
 
         # 检查每个教师每天的校区数量
         for teacher_id, daily_campuses in teacher_daily_campuses.items():
@@ -1059,13 +1068,14 @@ class SchedulingGeneticAlgorithm:
             task = self.task_dict[gene.task_id]
 
             # 教师维度
-            teacher_daily_classes[gene.teacher_id][gene.week_day].append(
-                (
-                    gene.start_slot,
-                    gene.start_slot + task.slots_count - 1,
-                    gene.classroom_id,
+            for t_id in task.teachers:
+                teacher_daily_classes[t_id][gene.week_day].append(
+                    (
+                        gene.start_slot,
+                        gene.start_slot + task.slots_count - 1,
+                        gene.classroom_id,
+                    )
                 )
-            )
 
             # 班级维度
             for class_id in task.classes:
@@ -1213,7 +1223,6 @@ class SchedulingGeneticAlgorithm:
 
         - weekend_penalty: 所有课程在周六/周日都会被扣一次基础分；
         - required_night_penalty: 必修 / 通识课如果安排在晚上 11-13 节，额外扣分；
-        - required_weekend_penalty: 必修 / 通识课在周末下午（6 节以后）再叠加一次惩罚；
         - elective_prime_time_penalty: 选修课如果占用上午或下午前半段（黄金时段），会有轻微惩罚。
         """
         penalty = 0
@@ -1225,18 +1234,11 @@ class SchedulingGeneticAlgorithm:
             if not offering:
                 continue
 
-            # 周末通用惩罚：任何课程安排在周六/周日都会有基础惩罚
-            if gene.week_day in [6, 7]:
-                penalty += self.config["penalty_scores"]["weekend_penalty"]
-
             # 检查必修课和通识课是否被安排在晚上（11-13节）
             if offering.course_nature in [CourseNature.REQUIRED, CourseNature.GENERAL]:
                 if gene.start_slot >= 11:  # 晚上时段
                     # 必修课在晚上的惩罚比较重
                     penalty += self.config["penalty_scores"]["required_night_penalty"]
-                elif gene.start_slot >= 6 and gene.week_day in [6, 7]:  # 周末下午
-                    # 必修课在周末的额外惩罚（在通用周末惩罚基础上再叠加）
-                    penalty += self.config["penalty_scores"]["required_weekend_penalty"]
 
             # 检查选修课是否过度占用黄金时段（上午和下午前半段）
             elif offering.course_nature == CourseNature.ELECTIVE:
@@ -1484,26 +1486,31 @@ class SchedulingGeneticAlgorithm:
         if progress_callback is None:
             progress_callback = self.config.get("progress_callback", None)
 
-        def _notify(stage: str, percent: int, generation: int = 0,
-                    best_fitness: float = 0.0, message: str = ""):
+        def _notify(
+            stage: str,
+            percent: int,
+            generation: int = 0,
+            best_fitness: float = 0.0,
+            message: str = "",
+        ):
             """内部统一推送，吞掉回调异常避免影响算法"""
             if progress_callback is None:
                 return
             try:
-                progress_callback({
-                    "stage": stage,
-                    "percent": percent,
-                    "generation": generation,
-                    "total_generations": total_generations,
-                    "best_fitness": best_fitness,
-                    "message": message,
-                })
+                progress_callback(
+                    {
+                        "stage": stage,
+                        "percent": percent,
+                        "generation": generation,
+                        "total_generations": total_generations,
+                        "best_fitness": best_fitness,
+                        "message": message,
+                    }
+                )
             except Exception as e:
                 logger.warning(f"进度回调执行失败: {e}")
 
-        logger.info(
-            f"正在初始化种群 (规模: {population_size})，这可能需要一些时间..."
-        )
+        logger.info(f"正在初始化种群 (规模: {population_size})，这可能需要一些时间...")
 
         # 初始化种群（带进度日志 + 回调）
         population = []
@@ -1514,8 +1521,11 @@ class SchedulingGeneticAlgorithm:
             # 初始化阶段占总进度的 10%
             if i % max(1, population_size // 10) == 0:
                 init_percent = int(i / population_size * 10)
-                _notify("init", init_percent,
-                        message=f"正在初始化种群 {i}/{population_size}")
+                _notify(
+                    "init",
+                    init_percent,
+                    message=f"正在初始化种群 {i}/{population_size}",
+                )
 
         logger.info("种群初始化完成！")
         _notify("init", 10, message="种群初始化完成，开始进化")
@@ -1543,16 +1553,24 @@ class SchedulingGeneticAlgorithm:
             # 进化阶段占总进度的 10%-95%，每5代推送一次
             if generation % 5 == 0:
                 evolve_percent = 10 + int(generation / total_generations * 85)
-                _notify("evolving", evolve_percent, generation=generation,
-                        best_fitness=best_fitness,
-                        message=f"第 {generation}/{total_generations} 代，最佳适应度: {best_fitness:.0f}")
+                _notify(
+                    "evolving",
+                    evolve_percent,
+                    generation=generation,
+                    best_fitness=best_fitness,
+                    message=f"第 {generation}/{total_generations} 代，最佳适应度: {best_fitness:.0f}",
+                )
 
             # 检查停滞
             if stagnation_count >= self.config["max_stagnation"]:
                 logger.info(f"算法停滞 {stagnation_count} 代，提前结束")
-                _notify("evolving", 95, generation=generation,
-                        best_fitness=best_fitness,
-                        message=f"算法收敛，第 {generation} 代提前结束")
+                _notify(
+                    "evolving",
+                    95,
+                    generation=generation,
+                    best_fitness=best_fitness,
+                    message=f"算法收敛，第 {generation} 代提前结束",
+                )
                 break
 
             # 精英保留
@@ -1595,10 +1613,13 @@ class SchedulingGeneticAlgorithm:
         best_solution = population[best_idx]
         best_solution = self._post_process_class_conflicts(best_solution)
 
-        _notify("done", 100,
-                generation=total_generations,
-                best_fitness=final_fitness_scores[best_idx],
-                message=f"排课完成，最终适应度: {final_fitness_scores[best_idx]:.0f}")
+        _notify(
+            "done",
+            100,
+            generation=total_generations,
+            best_fitness=final_fitness_scores[best_idx],
+            message=f"排课完成，最终适应度: {final_fitness_scores[best_idx]:.0f}",
+        )
 
         return best_solution
 
