@@ -44,6 +44,16 @@
         >
           <div class="bubble">
             <span class="bubble-text" v-html="formatText(msg.content)"></span>
+            <div v-if="msg.excelKey" class="excel-download">
+              <el-button
+                type="success"
+                size="small"
+                @click="downloadExcel(msg.excelKey)"
+              >
+                <el-icon><Download /></el-icon>
+                下载 Excel 导入表
+              </el-button>
+            </div>
           </div>
         </div>
 
@@ -84,7 +94,7 @@
 <script setup>
 import { ref, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ChatDotRound, Close, Cpu, Delete } from '@element-plus/icons-vue'
+import { ChatDotRound, Close, Cpu, Delete, Download } from '@element-plus/icons-vue'
 import { chatApi } from '@/api/chat'
 
 const SESSION_KEY = 'chat_session_id'
@@ -112,7 +122,6 @@ const scrollToBottom = async () => {
 }
 
 const formatText = (text) => {
-  // 简单处理换行
   return text.replace(/\n/g, '<br>')
 }
 
@@ -125,22 +134,61 @@ const send = async () => {
   await scrollToBottom()
 
   loading.value = true
-  try {
-    const sessionId = localStorage.getItem(SESSION_KEY) || ''
-    const res = await chatApi.send(sessionId, msg)
 
-    // 持久化 session_id
-    localStorage.setItem(SESSION_KEY, res.session_id)
+  // 占位气泡，流式 token 会不断追加到这里
+  const assistantMsg = { role: 'assistant', content: '' }
+  let bubblePushed = false
 
-    messages.value.push({ role: 'assistant', content: res.reply })
-    await scrollToBottom()
-  } catch (e) {
-    ElMessage.error('助手暂时无法回应，请稍后重试')
-    messages.value.push({ role: 'assistant', content: '抱歉，我暂时无法回应，请稍后重试。' })
-    await scrollToBottom()
-  } finally {
-    loading.value = false
-  }
+  const sessionId = localStorage.getItem(SESSION_KEY) || ''
+
+  chatApi.sendStream(sessionId, msg, {
+    onSession(id) {
+      localStorage.setItem(SESSION_KEY, id)
+    },
+    onToken(token) {
+      if (!bubblePushed) {
+        messages.value.push(assistantMsg)
+        bubblePushed = true
+        loading.value = false
+      }
+      assistantMsg.content += token
+      scrollToBottom()
+    },
+    onReplaceStart() {
+      assistantMsg.content = ''
+    },
+    onReplace(text) {
+      if (!bubblePushed) {
+        messages.value.push(assistantMsg)
+        bubblePushed = true
+        loading.value = false
+      }
+      assistantMsg.content = text
+      scrollToBottom()
+    },
+    onDownloadExcel(key) {
+      if (!bubblePushed) {
+        messages.value.push(assistantMsg)
+        bubblePushed = true
+        loading.value = false
+      }
+      assistantMsg.excelKey = key
+      scrollToBottom()
+    },
+    onDone() {
+      loading.value = false
+    },
+    onError(errMsg) {
+      loading.value = false
+      if (!bubblePushed) {
+        messages.value.push({ role: 'assistant', content: errMsg })
+      } else {
+        assistantMsg.content = errMsg
+      }
+      ElMessage.error('助手暂时无法回应，请稍后重试')
+      scrollToBottom()
+    },
+  })
 }
 
 const sendHint = (hint) => {
@@ -152,6 +200,10 @@ const clearSession = () => {
   localStorage.removeItem(SESSION_KEY)
   messages.value = []
   ElMessage.success('对话已清空，开始新会话')
+}
+
+const downloadExcel = (key) => {
+  chatApi.downloadBlackoutExcel(key)
 }
 </script>
 
@@ -304,4 +356,9 @@ const clearSession = () => {
   resize: none;
 }
 .send-btn { flex-shrink: 0; align-self: flex-end; }
+
+/* Excel 下载按钮 */
+.excel-download {
+  margin-top: 8px;
+}
 </style>
