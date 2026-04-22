@@ -21,7 +21,7 @@ async def get_teacher_timetable(
 ):
     """查询教师课表"""
     query = """
-        SELECT 
+        SELECT
             s.week_day as weekday,
             s.start_slot,
             s.end_slot,
@@ -32,7 +32,8 @@ async def get_teacher_timetable(
             cr.classroom_id,
             cr.classroom_name,
             cr.building_name,
-            cr.campus_id
+            cr.campus_id,
+            tt.offering_id
         FROM schedules s
         JOIN teaching_tasks tt ON s.task_id = tt.task_id
         JOIN course_offerings co ON tt.offering_id = co.offering_id
@@ -45,7 +46,7 @@ async def get_teacher_timetable(
           AND t.teacher_id = %s
     """
     params = [version_id, semester, teacher_id]
-    
+
     # 如果指定了周次，添加周次过滤
     if week_number is not None:
         query += """
@@ -57,24 +58,22 @@ async def get_teacher_timetable(
             )
         """
         params.extend([week_number, week_number, week_number])
-    
+
     query += " ORDER BY s.week_day, s.start_slot"
-    
+
     results = db.execute_query(query, tuple(params))
-    
-    # 为每个课程添加班级信息
+
+    # 为每个课程添加班级信息（按 offering_id 查，只取该排课对应的班级）
     for entry in results:
-        # 查询该课程的班级
         class_query = """
             SELECT c.class_name
             FROM offering_classes oc
             JOIN classes c ON oc.class_id = c.class_id
-            JOIN course_offerings co ON oc.offering_id = co.offering_id
-            WHERE co.course_id = %s AND co.semester = %s
+            WHERE oc.offering_id = %s
         """
-        classes = db.execute_query(class_query, (entry["course_id"], semester))
+        classes = db.execute_query(class_query, (entry["offering_id"],))
         entry["classes"] = [cls["class_name"] for cls in classes]
-    
+
     return results
 
 
@@ -88,7 +87,7 @@ async def get_class_timetable(
 ):
     """查询班级课表"""
     query = """
-        SELECT 
+        SELECT
             s.week_day as weekday,
             s.start_slot,
             s.end_slot,
@@ -99,7 +98,8 @@ async def get_class_timetable(
             cr.classroom_id,
             cr.classroom_name,
             cr.building_name,
-            cr.campus_id
+            cr.campus_id,
+            tt.offering_id
         FROM schedules s
         JOIN teaching_tasks tt ON s.task_id = tt.task_id
         JOIN course_offerings co ON tt.offering_id = co.offering_id
@@ -113,7 +113,7 @@ async def get_class_timetable(
           AND oc.class_id = %s
     """
     params = [version_id, semester, class_id]
-    
+
     if week_number is not None:
         query += """
             AND %s BETWEEN co.start_week AND co.end_week
@@ -124,23 +124,22 @@ async def get_class_timetable(
             )
         """
         params.extend([week_number, week_number, week_number])
-    
+
     query += " ORDER BY s.week_day, s.start_slot"
-    
+
     results = db.execute_query(query, tuple(params))
-    
-    # 为每个课程添加班级信息
+
+    # 为每个课程添加班级信息（按 offering_id 查，只取该排课对应的班级）
     for entry in results:
         class_query = """
             SELECT c.class_name
             FROM offering_classes oc
             JOIN classes c ON oc.class_id = c.class_id
-            JOIN course_offerings co ON oc.offering_id = co.offering_id
-            WHERE co.course_id = %s AND co.semester = %s
+            WHERE oc.offering_id = %s
         """
-        classes = db.execute_query(class_query, (entry["course_id"], semester))
+        classes = db.execute_query(class_query, (entry["offering_id"],))
         entry["classes"] = [cls["class_name"] for cls in classes]
-    
+
     return results
 
 
@@ -154,7 +153,7 @@ async def get_classroom_timetable(
 ):
     """查询教室课表"""
     query = """
-        SELECT 
+        SELECT
             s.week_day as weekday,
             s.start_slot,
             s.end_slot,
@@ -165,7 +164,8 @@ async def get_classroom_timetable(
             cr.classroom_id,
             cr.classroom_name,
             cr.building_name,
-            cr.campus_id
+            cr.campus_id,
+            tt.offering_id
         FROM schedules s
         JOIN teaching_tasks tt ON s.task_id = tt.task_id
         JOIN course_offerings co ON tt.offering_id = co.offering_id
@@ -178,7 +178,7 @@ async def get_classroom_timetable(
           AND s.classroom_id = %s
     """
     params = [version_id, semester, classroom_id]
-    
+
     if week_number is not None:
         query += """
             AND %s BETWEEN co.start_week AND co.end_week
@@ -189,23 +189,22 @@ async def get_classroom_timetable(
             )
         """
         params.extend([week_number, week_number, week_number])
-    
+
     query += " ORDER BY s.week_day, s.start_slot"
-    
+
     results = db.execute_query(query, tuple(params))
-    
-    # 为每个课程添加班级信息
+
+    # 为每个课程添加班级信息（按 offering_id 查，只取该排课对应的班级）
     for entry in results:
         class_query = """
             SELECT c.class_name
             FROM offering_classes oc
             JOIN classes c ON oc.class_id = c.class_id
-            JOIN course_offerings co ON oc.offering_id = co.offering_id
-            WHERE co.course_id = %s AND co.semester = %s
+            WHERE oc.offering_id = %s
         """
-        classes = db.execute_query(class_query, (entry["course_id"], semester))
+        classes = db.execute_query(class_query, (entry["offering_id"],))
         entry["classes"] = [cls["class_name"] for cls in classes]
-    
+
     return results
 
 
@@ -221,7 +220,7 @@ async def get_week_timetable(
 ):
     """查询某周的全部课表（支持过滤）"""
     query = """
-        SELECT 
+        SELECT
             s.week_day as weekday,
             s.start_slot,
             s.end_slot,
@@ -232,7 +231,8 @@ async def get_week_timetable(
             cr.classroom_id,
             cr.classroom_name,
             cr.building_name,
-            cr.campus_id
+            cr.campus_id,
+            tt.offering_id
         FROM schedules s
         JOIN teaching_tasks tt ON s.task_id = tt.task_id
         JOIN course_offerings co ON tt.offering_id = co.offering_id
@@ -250,35 +250,33 @@ async def get_week_timetable(
           )
     """
     params = [version_id, semester, week_number, week_number, week_number]
-    
+
     # 添加过滤条件
     if teacher_id:
         query += " AND t.teacher_id = %s"
         params.append(teacher_id)
-    
+
     if class_id:
         query += " AND EXISTS (SELECT 1 FROM offering_classes oc WHERE oc.offering_id = co.offering_id AND oc.class_id = %s)"
         params.append(class_id)
-    
+
     if classroom_id:
         query += " AND s.classroom_id = %s"
         params.append(classroom_id)
-    
+
     query += " ORDER BY s.week_day, s.start_slot"
-    
+
     results = db.execute_query(query, tuple(params))
-    
-    # 为每个课程添加班级信息
+
+    # 为每个课程添加班级信息（按 offering_id 查，只取该排课对应的班级）
     for entry in results:
         class_query = """
             SELECT c.class_name
             FROM offering_classes oc
             JOIN classes c ON oc.class_id = c.class_id
-            JOIN course_offerings co ON oc.offering_id = co.offering_id
-            WHERE co.course_id = %s AND co.semester = %s
+            WHERE oc.offering_id = %s
         """
-        classes = db.execute_query(class_query, (entry["course_id"], semester))
+        classes = db.execute_query(class_query, (entry["offering_id"],))
         entry["classes"] = [cls["class_name"] for cls in classes]
-    
-    return results
 
+    return results

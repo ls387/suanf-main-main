@@ -12085,3 +12085,8 @@
 /frontend/node_modules/.package-lock.json
 
 /zsh/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo

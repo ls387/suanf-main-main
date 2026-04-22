@@ -84,7 +84,13 @@ const handleQuery = async () => {
   
   loading.value = true
   try {
-    timetableData.value = await timetableApi.getClassTimetable(query.value)
+    const data = await timetableApi.getClassTimetable(query.value)
+    const selectedClass = classOptions.value.find(c => c.class_id === query.value.class_id)
+    const className = selectedClass?.class_name
+    timetableData.value = data.map(entry => ({
+      ...entry,
+      classes: className ? [className] : entry.classes
+    }))
     if (timetableData.value.length === 0) {
       ElMessage.info('该班级暂无课表')
     }
