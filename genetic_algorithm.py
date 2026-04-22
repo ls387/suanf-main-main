@@ -72,7 +72,6 @@ class SchedulingGeneticAlgorithm:
             "elitism_size": 15,  # 增加精英保留，保护优秀基因
             "max_stagnation": 60,  # 增加容忍度，给算法更多探索机会
             "penalty_scores": {
-                "hard_constraint": -99999,
                 "teacher_conflict": -50000,  # 大幅提高：教师冲突必须避免
                 "class_conflict": -80000,  # 最高优先级：班级冲突必须完全避免
                 "classroom_conflict": -50000,  # 大幅提高：教室冲突必须避免
